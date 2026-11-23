@@ -11,4 +11,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ParityBluetooth)' == 'true'">
+    <DefineConstants>$(DefineConstants);PARITY_BLUETOOTH</DefineConstants>
+  </PropertyGroup>
 </Project>

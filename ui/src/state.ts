@@ -152,6 +152,7 @@ export const store = {
   firstRun: false,
   // The PC's only Bluetooth adapters aren't connected over USB (error B3).
   adapterUnsupported: false,
+  desktopOnly: false,
   // usbip-win2 was installed and works only after a Windows restart.
   restartPending: false,
   update: {
@@ -464,6 +465,7 @@ export const apply = (msg: HostToMain): void => {
       store.startup = msg.startup;
       store.firstRun = msg.firstRun;
       store.adapterUnsupported = msg.adapterUnsupported;
+      store.desktopOnly = Boolean(msg.desktopOnly);
       store.restartPending = msg.restartPending;
       store.update = msg.update;
       store.language = msg.language;
@@ -700,7 +702,10 @@ export const apply = (msg: HostToMain): void => {
       break;
     case 'adapter':
       store.adapterUnsupported = msg.unsupported;
+      store.desktopOnly = Boolean(msg.desktopOnly);
       mark('page');
+      mark('hero');
+      mark('title');
       break;
     case 'restart':
       store.restartPending = msg.pending;

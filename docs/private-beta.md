@@ -1,6 +1,6 @@
 # Parity 0.19 private beta
 
-Use the x64 Setup EXE from the draft release. The installer checks for the existing WPods Bluetooth service and for the Microsoft runtimes. On a fresh PC it opens WPods Setup for the administrator-approved Bluetooth install. Parity itself installs for the current user.
+Use the Parity 0.19.1 x64 Setup EXE from the draft release. The desktop app installs for the current user. The optional AirPods controls install Parity’s own Bluetooth service and reuse USB/IP if already installed and verified.
 
 ## Test setups
 
@@ -10,15 +10,16 @@ Use the x64 Setup EXE from the draft release. The installer checks for the exist
 | Pro 2, either case | A different Bluetooth adapter | Check discovery, battery sources, listening modes, and the microphone route on another hardware combination. |
 | Pro 1 or a standard pair | A second adapter if available | Check the controls the model exposes, including Off on Pro 1 and basic playback on a standard pair. |
 
-Record the AirPods firmware, Bluetooth adapter name and USB hardware ID, Windows build, Parity version, and WPods service version. Mark each check **Pass**, **Fail**, or **Skipped**.
+Record the AirPods firmware, Bluetooth adapter name and USB hardware ID, Windows build, Parity version, and Bluetooth service version. Mark each check **Pass**, **Fail**, or **Skipped**.
 
 ## Setup and removal
 
-1. On a fresh Windows x64 PC, run Setup and complete the WPods prompts. If WPods asks for a restart, restart before pairing.
-2. On a PC with WPods configured, run Setup and confirm it reuses the Bluetooth service.
-3. Pair in Windows, quit the WPods tray app, and launch Parity from Start. Check the tray icon, Overview, and the pairing guide.
-4. Update an existing Parity install and verify that its preferences and Start shortcut carry over.
-5. Uninstall Parity from Installed apps. Confirm Windows removes the app entry and WPods can still open. Reinstall Parity and check that its preferences return.
+1. Install desktop-only on a fresh Windows 11 x64 PC. Check that the native Bluetooth adapter and existing devices keep working.
+2. Run Setup with full AirPods controls selected and decline administrator approval. Check that the desktop app still opens and the adapter is untouched.
+3. Run Setup again with approval. If prompted, restart before pairing. Check the tray, Overview, and connection diagnostics. Verify that a Bluetooth keyboard or mouse, if paired, reconnects and that normal AirPods playback works.
+4. On a PC with WPods installed, confirm Setup offers desktop-only. Test migration by removing WPods through Windows first and adding Parity controls afterward.
+5. Update Parity and verify that its preferences and Start shortcut carry over.
+6. Uninstall from Installed apps. Verify that Parity restores the native Bluetooth adapter before removing the service, and that native Bluetooth playback still works after reboot. Check both choices for keeping and removing a Parity-installed USB/IP driver.
 
 ## AirPods checks
 
@@ -34,4 +35,4 @@ Share results in a [private compatibility report](https://github.com/owenawsong/
 
 ## Development verification
 
-The package smoke test extracts the Setup EXE payload into an isolated directory, verifies all app files, and exercises the uninstaller against the staged copy. Fresh-PC prerequisite installation and Bluetooth behavior need the tests above.
+The package smoke test stages both payloads, verifies the desktop files and the bundled driver, and exercises desktop file removal. The administrator-approved Bluetooth changes and radio restoration need the physical Windows tests above.

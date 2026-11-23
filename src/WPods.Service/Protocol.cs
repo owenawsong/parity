@@ -32,9 +32,9 @@ namespace WPods.Service;
 /// </summary>
 internal static class Protocol
 {
-    public const string AapPipe = "WPods.Aap";
-    public const string MicPipe = "WPods.Mic";
-    public const string StatusPipe = "WPods.Service";
+    public const string AapPipe = BluetoothServiceIdentity.PipePrefix + ".Aap";
+    public const string MicPipe = BluetoothServiceIdentity.PipePrefix + ".Mic";
+    public const string StatusPipe = BluetoothServiceIdentity.PipePrefix + ".Service";
 
     public const byte AapData = 0x00;
     public const byte AapEnded = 0x01;

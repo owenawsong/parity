@@ -12,7 +12,7 @@ namespace WPods.Service;
 /// </summary>
 internal static unsafe partial class RadioDriver
 {
-    public const string StateKey = @"SOFTWARE\WPods\Service";
+    public const string StateKey = BluetoothServiceIdentity.StateKey;
     private const string EnumKey = @"SYSTEM\CurrentControlSet\Enum";
     private static readonly Guid RadioInterface = new("0850302A-B344-4FDA-9BE9-90576B8D46F0");
     private static readonly Guid UsbDeviceClass = new("88bae032-5a81-49f0-bc3d-a4ff138216d6");

@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <Compile Include="../../../src/WPods/Audio/AudioEndpoints.cs" />
+    <Compile Include="../../../src/BluetoothServiceIdentity.cs" />
     <Compile Include="../../../src/WPods/Audio/EarPlaybackRoutes.cs" />
     <Compile Include="../../../src/WPods/Audio/SpotifyBridge.cs" />
     <Compile Include="../../../src/WPods/Audio/SpotifyRouting.cs" />

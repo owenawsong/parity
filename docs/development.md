@@ -1,6 +1,6 @@
 # Build Parity
 
-The desktop build uses the x64 .NET SDK pinned in [global.json](../global.json), Node.js 24, and PowerShell 7. Hardware control requires an installed WPods Bluetooth service and its driver. The UI preview runs with simulated devices.
+The desktop build uses the x64 .NET SDK pinned in [global.json](../global.json), Node.js 24, and PowerShell 7. The packaged client uses the Parity Bluetooth service for hardware controls. The UI preview runs with simulated devices.
 
 ## Build Parity Setup
 
@@ -8,12 +8,15 @@ From the repository root on Windows:
 
 ```powershell
 npm --prefix ui ci
+./build.ps1 -NativeOnly
 ./tools/build-parity-setup.ps1 -OutputPath dist/Parity-Setup-x64.exe
 ```
 
-The build uses the .NET Framework compiler included in Windows to assemble a per-user Setup EXE. It embeds the same manifest-verified desktop payload as the ZIP. On a fresh PC it downloads the pinned WPods release, verifies its SHA-256, and passes control to WPods Setup. Existing installations reuse the service. Microsoft runtimes are downloaded only when missing, and Setup checks their signatures before running them. Uninstalling Parity preserves the Bluetooth service and app preferences.
+The build uses the .NET Framework compiler included in Windows to assemble Setup. It embeds the manifest-verified desktop ZIP, a Parity build of the Bluetooth service, and the pinned usbip-win2 installer. Setup verifies the USB/IP installer’s hash and publisher before running it for the optional Bluetooth install. Microsoft runtimes are downloaded only when missing and checked for a valid Microsoft signature.
 
-To verify the EXE without installing dependencies or changing the live app, run it with `--verify-package <empty-directory>` and check its exit code. The extracted stage includes `Uninstall-Parity.ps1`, which accepts `-StageDirectory <directory>` to test file removal independently. [Private beta checklist](private-beta.md)
+To verify the EXE without changing the live app or Bluetooth, use `--verify-package <empty-directory>` for the desktop payload and `--verify-bluetooth-package <empty-directory>` for the service payload. The staged `Uninstall-Parity.ps1` accepts `-StageDirectory <directory>` to test file removal. [Private beta checklist](private-beta.md)
+
+`./tools/tests/check-parity-setup.ps1 -Setup dist/Parity-Setup-x64.exe` runs these checks together and verifies the bundled USB/IP package.
 
 ## Build the desktop package
 
@@ -25,7 +28,7 @@ npm --prefix ui ci
 ./tools/build-pairside-live.ps1 -PackagePath dist/Parity-win-x64.zip
 ```
 
-The native build uses the upstream Rust/C++ toolchain and downloads models for microphone processing. See [the native build scripts](../native) for compiler and dependency setup. You can skip the native build if you already have a complete x64 runtime from a compatible WPods install. The package builder checks `.build/native/bin` and then the installed WPods folder by default. Pass `-RuntimeRoot <directory>` to select the native payload explicitly.
+The native build uses the upstream Rust/C++ toolchain and downloads models for microphone processing. See [the native build scripts](../native) for compiler and dependency setup. The package builder reads `.build/native/bin` by default. Pass `-RuntimeRoot <directory>` to select an existing native payload for either build. The local development build without `-PackagePath` still supports the legacy development adapter.
 
 The builder creates the archive, a per-file integrity manifest, and the installer. It prints the archive’s SHA-256. It builds the UI in a fresh directory using original Blender renders for AirPods Pro 3 and the repository’s illustrations for other models. Optional, locally imported Apple media stays out of the ZIP.
 

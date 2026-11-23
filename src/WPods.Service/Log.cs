@@ -18,7 +18,9 @@ internal static class Log
     private static readonly ConcurrentQueue<Entry> Queue = new();
     private static readonly AutoResetEvent Pending = new(initialState: false);
     private static readonly Lock WriteLock = new();
-    private static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WPods", "logs");
+    private static readonly string Dir = BluetoothServiceIdentity.IsParity
+        ? Path.Combine(AppContext.BaseDirectory, "logs")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WPods", "logs");
     private static readonly string FilePath = Path.Combine(Dir, "service.log");
 
     // Under WriteLock.

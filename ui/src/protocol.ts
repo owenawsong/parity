@@ -307,6 +307,7 @@ type MainInit = { type: 'init' } & Partial<GestureBindings> & Labels &
     startup: boolean;
     firstRun: boolean;
     adapterUnsupported: boolean;
+    desktopOnly?: boolean;
     restartPending: boolean;
     update: UpdateInfo;
     devices: Device[];
@@ -411,7 +412,7 @@ export type HostToMain =
   | ({ type: 'gestureBindings' } & GestureBindings)
   | PulseLive | PulseLibrary | PulseDetail | PulseWindow
   | HeadphoneLevel
-  | { type: 'connectionCheck'; request: number; service: 'restart' | 'running' | 'native' | 'offline' | 'missingBridge' | 'unsupported' | 'noAdapter' | 'checking'; serviceVersion: string; connected: boolean; discovery?: 'pairFirst' | 'connectFirst' | 'watching' | 'legacy' | 'waiting'; knownEndpoints: boolean; playback: string | null; callInput: string | null; callOutput: string | null; callMuted?: boolean; spatialDevice?: boolean; virtualDefaultOutsideParity?: boolean }
+  | { type: 'connectionCheck'; request: number; service: 'restart' | 'running' | 'native' | 'offline' | 'appOnly' | 'conflict' | 'missingBridge' | 'unsupported' | 'noAdapter' | 'checking'; serviceVersion: string; connected: boolean; discovery?: 'pairFirst' | 'connectFirst' | 'watching' | 'legacy' | 'waiting'; knownEndpoints: boolean; playback: string | null; callInput: string | null; callOutput: string | null; callMuted?: boolean; spatialDevice?: boolean; virtualDefaultOutsideParity?: boolean }
   | ({ type: 'connectionActivity' } & ConnectionActivity)
   | { type: 'mediaTimeline'; id: string; trackId: string; timeline: MediaTimeline | null }
   | { type: 'outputRoute'; id: DeviceId; otherOutput: string | null; defaultOutput: { name: string | null; onPair?: boolean } | null; action?: 'idle' | 'switching' | 'settings' }
@@ -453,7 +454,7 @@ export type HostToMain =
   | { type: 'mixer'; mixer: Mixer }
   | { type: 'hotkeys'; hotkeys: Hotkeys }
   | { type: 'update'; update: UpdateInfo }
-  | { type: 'adapter'; unsupported: boolean }
+  | { type: 'adapter'; unsupported: boolean; desktopOnly?: boolean }
   | { type: 'restart'; pending: boolean }
   | { type: 'toast'; toast: ToastId; device: DeviceId | null; code?: string };
 

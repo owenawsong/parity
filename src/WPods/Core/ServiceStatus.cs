@@ -45,7 +45,7 @@ internal sealed record UpdateInfo(UpdateStatus Status, bool Auto, bool Checked, 
 internal sealed class ServiceStatus : IDisposable
 {
     private const int MaxBackoffShift = 6; // 1 s up to 64 s
-    private const string GuardKey = @"SOFTWARE\WPods\Service";
+    private const string GuardKey = BluetoothServiceIdentity.StateKey;
     private const string GuardValue = "GuardTripped";
 
     private readonly Lock _lock = new();
@@ -140,7 +140,8 @@ internal sealed class ServiceStatus : IDisposable
             {
                 Log.Warn("service", $"pipe open failed, Win32 error {error}");
                 ScheduleLocked();
-                SetStateLocked(GuardTripped() ? ServiceState.Native : ServiceState.NotRunning, $"pipe not open, Win32 error {error}");
+                string detail = BluetoothServiceIdentity.IsParity && error == 2 && !Installed() ? "not-installed" : "";
+                SetStateLocked(GuardTripped() ? ServiceState.Native : ServiceState.NotRunning, $"pipe not open, Win32 error {error}", detail);
                 return;
             }
             Log.Info("service", "pipe opened");
@@ -243,6 +244,12 @@ internal sealed class ServiceStatus : IDisposable
     }
 
     private static bool GuardTripped() => Flag(GuardValue);
+
+    private static bool Installed()
+    {
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(BluetoothServiceIdentity.ServiceKey);
+        return key is not null;
+    }
 
     /// <summary>Setup installed usbip-win2, so the service starts only after the next Windows restart.</summary>
     public static bool WaitsForRestart() => Flag("WaitsForRestart");

@@ -1,8 +1,10 @@
 import { PairSteps } from '../components/common';
 import { createConnectionDisclosure } from '../components/connectionCheck';
-import { bindAttr } from '../i18n';
+import { setText } from '../dom';
+import { bindAttr, t } from '../i18n';
 import { Art, Icon } from '../icons';
 import { post } from '../host';
+import { store } from '../state';
 import { LegalFoot } from './legal';
 import type { Ctx, Page } from './page';
 
@@ -11,12 +13,13 @@ export const createEmpty = (ctx: Ctx): Page => {
   const check = createConnectionDisclosure();
   const art = Art({ model: 'empty', class: 'wp-empty__art' });
   bindAttr(art, 'aria-label', 'art.empty');
+  let body!: HTMLParagraphElement;
   const el = (
     <div class="wp-page">
       <div class="wp-empty">
         {art}
         <h1 class="wp-empty__title" l:text="empty.title" />
-        <p class="wp-empty__body" l:text="empty.body" />
+        <p class="wp-empty__body" ref={body} />
         <div class="wp-empty__actions">
           <button
             type="button"
@@ -36,5 +39,11 @@ export const createEmpty = (ctx: Ctx): Page => {
     </div>
   ) as HTMLDivElement;
 
-  return { el, sections: {connectionCheck: check.paint}, leave:check.leave, returnFocus: () => legal.link };
+  return {
+    el, leave: check.leave, returnFocus: () => legal.link,
+    sections: {
+      connectionCheck: check.paint,
+      title: () => setText(body, t(store.desktopOnly ? 'setup.desktopOnly' : 'empty.body')),
+    },
+  };
 };

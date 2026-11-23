@@ -8,9 +8,9 @@ namespace WPods.Core;
 /// <summary>Client side of the WPods.Service pipes: local, message mode, integers little-endian.</summary>
 internal static partial class ServicePipes
 {
-    public const string AapPipe = "WPods.Aap";
-    public const string MicPipe = "WPods.Mic";
-    public const string ServicePipe = "WPods.Service";
+    public const string AapPipe = BluetoothServiceIdentity.PipePrefix + ".Aap";
+    public const string MicPipe = BluetoothServiceIdentity.PipePrefix + ".Mic";
+    public const string ServicePipe = BluetoothServiceIdentity.PipePrefix + ".Service";
 
     // Message kinds (first byte).
     public const byte AapPacket = 0x00;
@@ -57,7 +57,7 @@ internal static partial class ServicePipes
         }
         if (error == Native.ErrorSuccess && !FromService(handle))
         {
-            Log.Warn("pipe", $"{name}: the pipe is not the WPods service's");
+            Log.Warn("pipe", $"{name}: the pipe is not owned by the Bluetooth service");
             error = ErrorAccessDenied;
         }
         if (error != Native.ErrorSuccess)
@@ -133,7 +133,7 @@ internal static partial class ServicePipes
         }
         try
         {
-            nint service = OpenService(scm, "WPodsService", 0x0004 /* SERVICE_QUERY_STATUS */);
+            nint service = OpenService(scm, BluetoothServiceIdentity.ServiceName, 0x0004 /* SERVICE_QUERY_STATUS */);
             if (service == 0)
             {
                 return false;

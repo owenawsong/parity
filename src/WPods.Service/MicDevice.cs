@@ -44,7 +44,7 @@ internal sealed unsafe partial class MicDevice
         Serial = SerialOf(address);
         Device = [18, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 64, unchecked((byte)Vid), Vid >> 8, unchecked((byte)Pid), Pid >> 8, 0x00, 0x01, 1, 2, 3, 1];
         _strings[0] = UsbIp.EnglishLanguages;
-        _strings[1] = UsbIp.StringDescriptor("WPods");
+        _strings[1] = UsbIp.StringDescriptor(BluetoothServiceIdentity.Product);
         _strings[2] = UsbIp.StringDescriptor("A2DP, " + (name.Length > 100 ? name[..100] : name));
         _strings[3] = UsbIp.StringDescriptor(Serial);
         _strings[4] = UsbIp.StringDescriptor("Headset");
@@ -77,7 +77,7 @@ internal sealed unsafe partial class MicDevice
 
     public bool Capturing => _capturing;
 
-    public static string SerialOf(ulong address) => $"WPODS{address:X12}";
+    public static string SerialOf(ulong address) => $"{BluetoothServiceIdentity.MicSerialPrefix}{address:X12}";
 
     /// <summary>
     /// Queues PCM from the app (mono 48 kHz s16le) whose first sample is at <paramref name="position"/> on the AirPods'
@@ -449,7 +449,7 @@ internal sealed unsafe partial class MicDevice
         using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\" + UsbDevice);
         foreach (string serial in key?.GetSubKeyNames() ?? [])
         {
-            if (serial.StartsWith("WPODS", StringComparison.OrdinalIgnoreCase))
+            if (serial.StartsWith(BluetoothServiceIdentity.MicSerialPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 RadioDriver.ForgetHiddenSubtree($@"{UsbDevice}\{serial}", includeRoot: true, audioOnly: false);
             }

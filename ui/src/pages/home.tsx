@@ -290,6 +290,10 @@ export const createHome = (ctx: Ctx): Page => {
             class="wp-btn wp-btn--primary"
             ref={action}
             onclick={() => {
+              if (store.desktopOnly) {
+                post({ type: 'openBluetoothSettings' });
+                return;
+              }
               const d = current();
               if (!d) {
                 return;
@@ -518,12 +522,14 @@ export const createHome = (ctx: Ctx): Page => {
 
     const showWakeHint = offline && d.hasKeys;
     setClass(keysHint, 'wp-hero__hint--wake', showWakeHint);
-    setText(hintText, t(showWakeHint ? d.art === 'max' ? 'home.hintMax' : 'home.hintBuds' : 'home.keysHint'));
-    setHidden(keysHint, !showWakeHint && (d.hasKeys || connected));
+    setText(hintText, t(store.desktopOnly ? 'setup.desktopOnly'
+      : showWakeHint ? d.art === 'max' ? 'home.hintMax' : 'home.hintBuds' : 'home.keysHint'));
+    setHidden(keysHint, !store.desktopOnly && !showWakeHint && (d.hasKeys || connected));
 
     setClass(hero, 'wp-hero--lift-playing', lifting);
     const act =
-      carryCancel ? (['home.cancel', 'secondary'] as const) : conn === 'connected'
+      store.desktopOnly ? (['empty.openBluetooth', 'secondary'] as const)
+        : carryCancel ? (['home.cancel', 'secondary'] as const) : conn === 'connected'
         ? (['home.disconnect', 'secondary'] as const)
         : conn === 'connecting'
           ? (['home.cancel', 'secondary'] as const)

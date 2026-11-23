@@ -427,7 +427,7 @@ internal static partial class AudioEndpoints
     internal static bool IsVirtualPairMicrophone(string endpoint, ulong address)
     {
         string instance = "SWD\\MMDEVAPI\\" + endpoint;
-        string serial = $"\\WPODS{address:X12}";
+        string serial = $"\\{BluetoothServiceIdentity.MicSerialPrefix}{address:X12}";
         if (CM_Locate_DevNode(out uint node, instance, 0) != 0) return false;
         char[] id = new char[256];
         for (int depth = 0; depth < 12 && CM_Get_Parent(out node, node, 0) == 0; depth++)

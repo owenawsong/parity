@@ -8,22 +8,18 @@ using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.ServiceProcess;
-using System.Threading;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 internal static class Setup
 {
-    private const string ServiceKey = @"SYSTEM\CurrentControlSet\Services\WPodsService";
     private const string RuntimeKey = @"SOFTWARE\dotnet\Setup\InstalledVersions\x64";
     private const string EdgeKey = @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-    private const string WPodsUrl = "https://github.com/FPNDev/wpods/releases/download/v0.4.3/WPods-Setup.exe";
-    private const string WPodsHash = "07352b8faae07204e8f754097ce33a193d559dff93bdb1dd8593401046050c25";
     private const string DotNetUrl = "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe";
     private const string WebViewUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
-    private const int UntrustedMicrosoftInstaller = 22352;
+    private const int UntrustedInstaller = 22352;
     private static readonly string Local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
     private static readonly string PowerShell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
     internal static readonly string DesktopExe = Path.Combine(Local, @"Programs\Pairside\Pairside.exe");
@@ -33,13 +29,23 @@ internal static class Setup
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        if (args.Length == 2 && args[0] == "--verify-package")
+        if (args.Length == 1 && args[0] == "--install-bluetooth")
+        {
+            try { return BluetoothProvisioning.Install(); }
+            catch (Exception error)
+            {
+                MessageBox.Show(error.Message, "Parity Bluetooth", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return 1;
+            }
+        }
+        if (args.Length == 2 && (args[0] == "--verify-package" || args[0] == "--verify-bluetooth-package"))
         {
             try
             {
                 string directory = Path.GetFullPath(args[1]);
                 RequireEmptyStage(directory);
-                InstallDesktop(directory, new Progress<string>());
+                if (args[0] == "--verify-package") InstallDesktop(directory, new Progress<string>());
+                else BluetoothProvisioning.Unpack(directory);
                 return 0;
             }
             catch (Exception error)
@@ -49,11 +55,11 @@ internal static class Setup
             }
         }
 
-        using (var mutex = new Mutex(false, @"Local\Parity.Setup"))
+        using (var mutex = new System.Threading.Mutex(false, @"Local\Parity.Setup"))
         {
             bool acquired;
             try { acquired = mutex.WaitOne(0); }
-            catch (AbandonedMutexException) { acquired = true; }
+            catch (System.Threading.AbandonedMutexException) { acquired = true; }
             if (!acquired)
             {
                 MessageBox.Show("Parity Setup is already open.", "Parity Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -84,11 +90,6 @@ internal static class Setup
             return valueKey == null ? null : valueKey.GetValue(property) as string;
     }
 
-    internal static bool HasWPods
-    {
-        get { return !String.IsNullOrEmpty(ReadRegistry(RegistryHive.LocalMachine, RegistryView.Registry64, ServiceKey, "ImagePath")); }
-    }
-
     private static bool HasDesktopRuntime()
     {
         string location = ReadRegistry(RegistryHive.LocalMachine, RegistryView.Registry32, RuntimeKey, "InstallLocation");
@@ -112,57 +113,64 @@ internal static class Setup
                (Version.TryParse(user, out version) && version.Major > 0);
     }
 
-    private static bool ServiceRunning()
+    internal static void StopParityService()
     {
-        using (var service = new ServiceController("WPodsService"))
+        using (var service = new System.ServiceProcess.ServiceController(BluetoothProvisioning.ServiceName))
         {
-            try { return service.Status == ServiceControllerStatus.Running; }
-            catch (InvalidOperationException) { return false; }
+            if (service.Status == System.ServiceProcess.ServiceControllerStatus.Stopped) return;
+            if (service.Status != System.ServiceProcess.ServiceControllerStatus.StopPending) service.Stop();
+            service.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(60));
         }
     }
 
-    internal static string Install(IProgress<string> status)
+    internal static string Install(bool bluetooth, IProgress<string> status)
     {
         string temp = NewTemp();
         try
         {
-            if (!HasWPods)
-            {
-                status.Report("Downloading WPods Bluetooth setup…");
-                string setup = Download(WPodsUrl, temp, "WPods-Setup.exe");
-                status.Report("Complete the WPods setup window to prepare Bluetooth…");
-                using (var file = File.Open(setup,FileMode.Open,FileAccess.Read,FileShare.Read))
-                using (var sha = SHA256.Create())
-                {
-                    string actual = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "");
-                    if (!String.Equals(actual,WPodsHash,StringComparison.OrdinalIgnoreCase))
-                        throw new IOException("The WPods download failed its integrity check. Try again.");
-                    int result = Run(setup, "/SP- /NORESTART /MERGETASKS=\"!desktopicon,!startup,!autoupdate\"", true);
-                    if (result != 0 && result != 3010)
-                        throw new InvalidOperationException("WPods setup ended with code " + result + ". Check its setup window or retry.");
-                }
-                if (!HasWPods)
-                    throw new InvalidOperationException("WPods Bluetooth setup did not finish. Open Parity Setup to try again.");
-            }
             if (!HasDesktopRuntime())
             {
                 status.Report("Installing the Microsoft .NET 10 Desktop Runtime…");
-                InstallMicrosoft(Download(DotNetUrl, temp, "dotnet-desktop-x64.exe"), "/install /quiet /norestart");
+                RunVerifiedInstaller(Download(DotNetUrl, temp, "dotnet-desktop-x64.exe"), "/install /quiet /norestart", "Microsoft Corporation");
                 if (!HasDesktopRuntime())
                     throw new InvalidOperationException("The .NET 10 Desktop Runtime could not be detected after installation.");
             }
             if (!HasWebView())
             {
                 status.Report("Installing Microsoft Edge WebView2…");
-                InstallMicrosoft(Download(WebViewUrl, temp, "MicrosoftEdgeWebView2Setup.exe"), "/silent /install");
+                RunVerifiedInstaller(Download(WebViewUrl, temp, "MicrosoftEdgeWebView2Setup.exe"), "/silent /install", "Microsoft Corporation");
                 if (!HasWebView())
                     throw new InvalidOperationException("The WebView2 Runtime could not be detected after installation.");
             }
-            InstallDesktop(null,status);
-            for (int attempt=0; attempt<8 && !ServiceRunning(); attempt++) Thread.Sleep(1000);
-            return ServiceRunning()
-                ? "Parity is installed. Pair your AirPods in Windows and open Parity from Start."
-                : "Parity is installed. Restart Windows if WPods asked you to, then open Parity from Start.";
+            InstallDesktop(null, status);
+            if (!bluetooth)
+                return BluetoothProvisioning.Installed
+                    ? "Parity is installed. You can open it now."
+                    : "Parity desktop is installed. Run Setup again to add full AirPods controls.";
+            status.Report("Waiting for administrator approval for AirPods controls…");
+            int result;
+            try
+            {
+                var start = new ProcessStartInfo(Application.ExecutablePath, "--install-bluetooth")
+                {
+                    UseShellExecute = true, Verb = "runas", WorkingDirectory = Environment.SystemDirectory
+                };
+                using (var process = Process.Start(start))
+                {
+                    process.WaitForExit();
+                    result = process.ExitCode;
+                }
+            }
+            catch (Win32Exception error)
+            {
+                if (error.NativeErrorCode != 1223) throw;
+                return "Parity desktop is installed. AirPods controls were skipped when administrator approval was canceled.";
+            }
+            if (result == BluetoothProvisioning.RestartRequired)
+                return "Parity is installed. Restart Windows when convenient to finish enabling AirPods controls.";
+            if (result != 0)
+                return "Parity desktop is installed. Run Setup again to retry the optional AirPods controls.";
+            return "Parity is installed. Pair your AirPods through Windows Bluetooth and open Parity.";
         }
         finally { CleanTemp(temp); }
     }
@@ -192,29 +200,52 @@ internal static class Setup
     private static string PS(string text) { return "'" + text.Replace("'","''") + "'"; }
     private static string Quote(string path) { return "\"" + path + "\""; }
 
-    private static void InstallMicrosoft(string file,string args)
+    private static string VerifyPublisher(string file, string publisher)
     {
-        // Hold the verified installer open until it exits so it cannot be swapped after validation.
-        string script = "$f=[IO.File]::Open(" + PS(file) + ",'Open','Read','Read');try{" +
-            "$s=Get-AuthenticodeSignature -LiteralPath " + PS(file) + ";" +
+        return "$s=Get-AuthenticodeSignature -LiteralPath " + PS(file) + ";" +
             "if($s.Status -ne 'Valid' -or ($s.SignerCertificate.SubjectName.Format($true) -split '\\r?\\n') " +
-            "-cnotcontains 'O=Microsoft Corporation'){exit " + UntrustedMicrosoftInstaller + "};" +
-            "$p=[Diagnostics.Process]::Start(" + PS(file) + "," + PS(args) + ");" +
-            "$p.WaitForExit();exit $p.ExitCode}finally{$f.Dispose()}";
-        int result = Run(PowerShell,"-NoProfile -NonInteractive -Command " + Quote(script),false);
-        if (result == UntrustedMicrosoftInstaller)
-            throw new IOException("The downloaded prerequisite could not be verified as Microsoft-signed.");
-        if (result != 0 && result != 3010)
-            throw new IOException("A Microsoft prerequisite installer ended with exit code " + result + ".");
+            "-cnotcontains " + PS("O=" + publisher) + "){exit " + UntrustedInstaller + "};";
     }
 
-    private static int Run(string executable,string args,bool visible)
+    private static int RunPowerShell(string script)
+    {
+        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop';" + script));
+        return Run(PowerShell, "-NoProfile -NonInteractive -EncodedCommand " + encoded, false);
+    }
+
+    internal static bool TrustedPublisher(string file, string publisher)
+    {
+        return RunPowerShell(VerifyPublisher(file, publisher) + "exit 0") == 0;
+    }
+
+    internal static int RunVerifiedInstaller(string file, string args, string publisher, string hash = null)
+    {
+        // Keep the executable locked against replacement throughout verification and launch.
+        using (var input = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            if (hash != null)
+            {
+                using (var sha = SHA256.Create())
+                    if (!String.Equals(BitConverter.ToString(sha.ComputeHash(input)).Replace("-", ""), hash, StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("A bundled component failed its integrity check.");
+            }
+            string start = "$p=[Diagnostics.Process]::Start(" + PS(file) + "," + PS(args) + ");$p.WaitForExit();exit $p.ExitCode";
+            int result = RunPowerShell(VerifyPublisher(file, publisher) + start);
+            if (result == UntrustedInstaller) throw new IOException("Setup could not verify the publisher of " + Path.GetFileName(file) + ".");
+            if (result != 0 && result != BluetoothProvisioning.RestartRequired)
+                throw new IOException(Path.GetFileName(file) + " returned setup code " + result + ".");
+            return result;
+        }
+    }
+
+    internal static int Run(string executable,string args,bool visible)
     {
         var start = new ProcessStartInfo(executable, args)
         {
             UseShellExecute=visible,
             CreateNoWindow=!visible,
             WindowStyle=visible ? ProcessWindowStyle.Normal : ProcessWindowStyle.Hidden,
+            WorkingDirectory=Environment.SystemDirectory,
         };
         // A process launched from PowerShell 7 can inherit a module path that has no Windows PowerShell modules.
         if (!visible && String.Equals(executable, PowerShell, StringComparison.OrdinalIgnoreCase))
@@ -254,18 +285,13 @@ internal static class Setup
         finally { CleanTemp(temp); }
     }
 
-    internal static bool WPodsTrayRunning()
-    {
-        var processes=Process.GetProcessesByName("WPods");
-        foreach (var process in processes) process.Dispose();
-        return processes.Length>0;
-    }
 }
 
 internal sealed class SetupWindow : Form
 {
     private readonly Label status = new Label();
     private readonly Button next = new Button();
+    private readonly CheckBox bluetooth = new CheckBox();
     private readonly ProgressBar progress = new ProgressBar();
     private bool busy;
     private bool installed;
@@ -273,13 +299,15 @@ internal sealed class SetupWindow : Form
     internal SetupWindow()
     {
         Text="Parity Setup";
-        ClientSize=new Size(536,322);
-        MinimumSize=new Size(512,350);
+        ClientSize=new Size(544,365);
+        MinimumSize=new Size(544,404);
         StartPosition=FormStartPosition.CenterScreen;
         MaximizeBox=false;
         Font=new Font("Segoe UI",10);
         Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        var layout=new TableLayoutPanel { Dock=DockStyle.Fill, Padding=new Padding(25), ColumnCount=1, RowCount=5 };
+        var layout=new TableLayoutPanel { Dock=DockStyle.Fill, Padding=new Padding(25), ColumnCount=1, RowCount=7 };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -287,15 +315,25 @@ internal sealed class SetupWindow : Form
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var heading=new Label { Text="Install Parity", Font=new Font(Font.FontFamily,23,FontStyle.Bold),
             AutoSize=true, Margin=new Padding(0,0,0,12) };
+        bluetooth.Text = "Add full AirPods controls";
+        bluetooth.AutoSize = true;
+        bool hasWPods = BluetoothProvisioning.WPodsPresent;
+        bluetooth.Enabled = !hasWPods;
+        bluetooth.Margin = new Padding(0, 0, 0, 6);
         var info=new Label
         {
             AutoSize=true, MaximumSize=new Size(474,0), Margin=new Padding(0,0,0,16),
-            Text=Setup.HasWPods
-                ? "Setup will reuse the WPods Bluetooth service already on this PC. Quit Parity from the tray before installing an update."
-                : "Setup will open WPods Setup to install the Bluetooth service and signed driver. It may ask for administrator approval or a restart."
+            Text=hasWPods
+                ? "You can install the desktop app now. Remove WPods through Installed apps before adding Parity's AirPods controls."
+                : "Adds a Bluetooth service and a signed USB/IP driver for listening modes, EQ and other earbud settings. Windows might briefly lose Bluetooth and may ask you to restart."
         };
+        var settings = new LinkLabel
+        {
+            Text = "Open Installed apps", Visible = hasWPods, AutoSize = true, Margin = new Padding(0, 0, 0, 12)
+        };
+        settings.LinkClicked += delegate { Process.Start("ms-settings:appsfeatures"); };
         status.Dock=DockStyle.Fill;
-        status.Text="AirPods control for Windows";
+        status.Text="Parity installs for your Windows account.";
         status.ForeColor=SystemColors.GrayText;
         progress.Style=ProgressBarStyle.Marquee;
         progress.Dock=DockStyle.Top;
@@ -308,7 +346,9 @@ internal sealed class SetupWindow : Form
         next.Anchor=AnchorStyles.Right;
         next.Click+=Begin;
         layout.Controls.Add(heading);
+        layout.Controls.Add(bluetooth);
         layout.Controls.Add(info);
+        layout.Controls.Add(settings);
         layout.Controls.Add(status);
         layout.Controls.Add(progress);
         layout.Controls.Add(next);
@@ -321,11 +361,6 @@ internal sealed class SetupWindow : Form
     {
         if (installed)
         {
-            if (Setup.WPodsTrayRunning())
-            {
-                status.Text="Quit WPods from the system tray, then open Parity. Leave the Bluetooth service running.";
-                return;
-            }
             try { Process.Start(Setup.DesktopExe); Close(); }
             catch (Win32Exception error) { status.Text=error.Message; }
             return;
@@ -333,12 +368,14 @@ internal sealed class SetupWindow : Form
 
         busy=true;
         next.Enabled=false;
+        bool addControls = bluetooth.Checked && bluetooth.Enabled;
+        bluetooth.Enabled=false;
         progress.Visible=true;
         status.ForeColor=SystemColors.ControlText;
         try
         {
             var reporter=new Progress<string>(message=> status.Text=message);
-            status.Text=await Task.Run(()=>Setup.Install(reporter));
+            status.Text=await Task.Run(()=>Setup.Install(addControls, reporter));
             installed=true;
             next.Text="Open Parity";
         }
@@ -352,6 +389,7 @@ internal sealed class SetupWindow : Form
             busy=false;
             progress.Visible=false;
             next.Enabled=true;
+            if (!installed) bluetooth.Enabled=!BluetoothProvisioning.WPodsPresent;
         }
     }
 }

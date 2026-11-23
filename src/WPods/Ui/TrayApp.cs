@@ -82,6 +82,7 @@ internal sealed partial class TrayApp : ApplicationContext
     private string _updateError = "";
     // No Bluetooth adapter is connected over USB (B3): the window shows only that.
     private bool _adapterUnsupported;
+    private bool _desktopOnly;
     // The service starts only after the Windows restart usbip-win2 needs: the window asks for it.
     private bool _restartPending;
 
@@ -377,10 +378,16 @@ internal sealed partial class TrayApp : ApplicationContext
             return;
         }
         _serviceDownTimer.Stop();
+        if (BluetoothServiceIdentity.IsParity)
+        {
+            _nearby.SetHardwareControlsAvailable(state == ServiceState.Running);
+        }
         bool unsupported = state == ServiceState.Unsupported && _service.Detail == "not-usb";
-        if (unsupported != _adapterUnsupported)
+        bool desktopOnly = _service.Detail is "not-installed" or "conflicting-service";
+        if (unsupported != _adapterUnsupported || desktopOnly != _desktopOnly)
         {
             _adapterUnsupported = unsupported;
+            _desktopOnly = desktopOnly;
             SendAdapter();
             MarkDirty(Dirty.Offers);
         }
@@ -401,7 +408,7 @@ internal sealed partial class TrayApp : ApplicationContext
                 QueueToast("serviceDown", 0, "B1");
                 break;
             case ServiceState.NotRunning:
-                _serviceDownTimer.Start();
+                if (_service.Detail != "not-installed") _serviceDownTimer.Start();
                 break;
             case ServiceState.Updating:
                 Log.Info("ui", "an update is being installed: closing (the service reopens WPods)");
@@ -469,7 +476,7 @@ internal sealed partial class TrayApp : ApplicationContext
         if ((dirty & Dirty.Offers) != 0)
         {
             // No nearby offers while the adapter cannot be used.
-            _offers = _adapterUnsupported ? [] : _nearby.Offers;
+            _offers = _adapterUnsupported || _desktopOnly ? [] : _nearby.Offers;
             _offerByAddress.Clear();
             foreach (NearbyOffer offer in _offers)
             {

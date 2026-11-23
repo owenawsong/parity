@@ -1275,6 +1275,7 @@ internal sealed partial class TrayApp
         }
         Utf8JsonWriter w = _writer.Begin("adapter");
         w.WriteBoolean("unsupported", _adapterUnsupported);
+        w.WriteBoolean("desktopOnly", _desktopOnly);
         PostMain(_writer.End());
     }
 

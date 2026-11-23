@@ -341,6 +341,7 @@ internal sealed partial class TrayApp
         WriteGestureBindings(w);
         w.WriteBoolean("firstRun", !_prefs.FirstRunDone);
         w.WriteBoolean("adapterUnsupported", _adapterUnsupported);
+        w.WriteBoolean("desktopOnly", _desktopOnly);
         w.WriteBoolean("restartPending", _restartPending);
         WriteUpdate(w);
         WriteDevices(w);

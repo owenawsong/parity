@@ -15,7 +15,7 @@ $runtimeFiles += $models | ForEach-Object { "models\$_.onnx" }
 
 if (!$RuntimeRoot) {
     $RuntimeRoot = Join-Path $rootPath '.build/native/bin'
-    if ($runtimeFiles | Where-Object { !(Test-Path -LiteralPath (Join-Path $RuntimeRoot $_) -PathType Leaf) } | Select-Object -First 1) {
+    if (!$PackagePath -and ($runtimeFiles | Where-Object { !(Test-Path -LiteralPath (Join-Path $RuntimeRoot $_) -PathType Leaf) } | Select-Object -First 1)) {
         $RuntimeRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WPods'
     }
 }
@@ -40,7 +40,7 @@ if ($PackagePath) {
     [IO.Directory]::CreateDirectory($bundle) | Out-Null
     $publishPath = Join-Path $bundle 'app'
     $uiArgs = @('--bundled-pro3-art', "--fresh-output=$packageWeb")
-    $publishArgs += @("-p:ParityPackageWeb=$packageWeb", '--artifacts-path', (Join-Path $stage 'artifacts'), '-p:DebugSymbols=false', '-p:DebugType=None')
+    $publishArgs += @('-p:ParityBluetooth=true', "-p:ParityPackageWeb=$packageWeb", '--artifacts-path', (Join-Path $stage 'artifacts'), '-p:DebugSymbols=false', '-p:DebugType=None')
 }
 
 Push-Location (Join-Path $rootPath 'ui')
@@ -64,7 +64,7 @@ if ($PackagePath) {
     $files = @(foreach ($file in Get-ChildItem -LiteralPath $publishPath -File -Recurse) {
         [ordered]@{ path = $file.FullName.Substring($publishPath.Length + 1); sha256 = (Get-FileHash -LiteralPath $file.FullName).Hash }
     })
-    $manifest = [ordered]@{ product = 'Parity'; schema = 1; files = $files }
+    $manifest = [ordered]@{ product = 'Parity'; schema = 1; bluetooth = 'parity'; files = $files }
     [IO.File]::WriteAllText((Join-Path $bundle 'manifest.json'), ($manifest | ConvertTo-Json -Depth 4))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-pairside-desktop.ps1') -Destination (Join-Path $bundle 'Install-Parity.ps1')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-parity-desktop.ps1') -Destination (Join-Path $bundle 'Uninstall-Parity.ps1')
@@ -72,8 +72,8 @@ if ($PackagePath) {
 Parity for Windows x64
 
 The desktop app requires the Microsoft .NET 10 Desktop Runtime (x64) and the
-Microsoft Edge WebView2 Runtime. For AirPods controls, first configure the
-WPods Bluetooth service and driver on this PC. Quit WPods from its tray menu.
+Microsoft Edge WebView2 Runtime. Use Parity Setup to add full AirPods controls.
+The ZIP alone installs the desktop app and leaves Windows Bluetooth in charge.
 
 Extract this entire archive. Open PowerShell in the extracted folder and run:
     .\Install-Parity.ps1

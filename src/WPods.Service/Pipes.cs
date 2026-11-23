@@ -284,7 +284,9 @@ internal sealed class StatusPipeServer(Engine engine)
 
     public void Broadcast(ServiceState state, string detail) => BroadcastMessage(Message(state, detail));
 
+#if !PARITY_BLUETOOTH
     public void BroadcastUpdate() => BroadcastMessage(UpdateMessage());
+#endif
 
     private void BroadcastMessage(byte[] m)
     {
@@ -299,6 +301,9 @@ internal sealed class StatusPipeServer(Engine engine)
 
     private byte[] UpdateMessage()
     {
+#if PARITY_BLUETOOTH
+        return [Protocol.UpdateInfo, 0, 0, .. Encoding.UTF8.GetBytes($"{typeof(Engine).Assembly.GetName().Version}\0\0\0")];
+#else
         if (engine.Updater is not { } updater)
         {
             return [Protocol.UpdateInfo, 0, Updater.Auto ? (byte)1 : (byte)0, .. Encoding.UTF8.GetBytes($"{Updater.Current}\0\0\0")];
@@ -306,6 +311,7 @@ internal sealed class StatusPipeServer(Engine engine)
         (UpdateStatus status, bool auto, bool isChecked, Version? available, string? notes, string error) = updater.State;
         byte flags = (byte)((auto ? 1 : 0) | (isChecked ? 2 : 0));
         return [Protocol.UpdateInfo, (byte)status, flags, .. Encoding.UTF8.GetBytes($"{Updater.Current}\0{available}\0{notes}\0{error}")];
+#endif
     }
 
     private static byte[] Message(ServiceState state, string detail)
@@ -353,6 +359,7 @@ internal sealed class StatusPipeServer(Engine engine)
                     case Protocol.Retry:
                         engine.Retry();
                         break;
+#if !PARITY_BLUETOOTH
                     case Protocol.SetAutoUpdate when n >= 2:
                         engine.Updater?.SetAuto(buffer[1] != 0);
                         break;
@@ -365,6 +372,7 @@ internal sealed class StatusPipeServer(Engine engine)
                     case Protocol.AppStarted:
                         engine.AppStarted();
                         break;
+#endif
                 }
             }
         }

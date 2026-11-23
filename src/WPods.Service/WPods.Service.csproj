@@ -8,9 +8,18 @@
     <RootNamespace>WPods.Service</RootNamespace>
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(ParityBluetooth)' == 'true'">
+    <AssemblyName>Parity.Bluetooth</AssemblyName>
+    <Product>Parity</Product>
+    <Description>Parity Bluetooth service</Description>
+  </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../BluetoothServiceIdentity.cs" Link="BluetoothServiceIdentity.cs" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
     <Content Include="$(NuGetPackageRoot)system.serviceprocess.servicecontroller\10.0.0\THIRD-PARTY-NOTICES.TXT" Link="dotnet-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(ParityBluetooth)' == 'true'">
+    <Compile Remove="Updater.cs;SessionLauncher.cs" />
   </ItemGroup>
 </Project>

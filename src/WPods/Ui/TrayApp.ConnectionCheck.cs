@@ -31,7 +31,9 @@ internal sealed partial class TrayApp
         {
             ServiceState.Running => "running",
             ServiceState.Native => "native",
+            ServiceState.NotRunning when service.Detail == "not-installed" => "appOnly",
             ServiceState.NotRunning => "offline",
+            ServiceState.Unsupported when service.Detail == "conflicting-service" => "conflict",
             ServiceState.Unsupported when service.Detail == "usbip-missing" => "missingBridge",
             ServiceState.Unsupported when service.Detail == "not-usb" => "unsupported",
             ServiceState.Unsupported => "noAdapter",

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
+using WPods;
 using WPods.Service;
 
 // The Windows service when run without arguments, otherwise a command for Setup or the SCM's recovery (see Usage).
@@ -14,6 +15,7 @@ return args.FirstOrDefault() switch
     "--replug" => RadioDriver.Find(out _) is { } radio && RadioDriver.CyclePort(radio) ? 0 : 1,
     "--guard" => Guard(),
     "--status" => ServiceSetup.Status(),
+    "--check-adapter" => RadioDriver.Find(out _) is not null ? 0 : 20,
     null => RunService(),
     _ => Usage(),
 };
@@ -44,7 +46,7 @@ static int RunService()
 
 static int Usage()
 {
-    Console.Error.WriteLine("usage: WPods.Service.exe [--install | --stop | --uninstall | --restore-native | --replug | --guard | --status]");
+    Console.Error.WriteLine("Options: --install, --stop, --uninstall, --restore-native, --replug, --guard, --status, --check-adapter");
     return 2;
 }
 
@@ -108,7 +110,7 @@ internal static partial class Timing
 
 internal static class ServiceSetup
 {
-    public const string Name = "WPodsService";
+    public const string Name = BluetoothServiceIdentity.ServiceName;
 
     private static string Exe => Environment.ProcessPath!;
 
@@ -116,12 +118,13 @@ internal static class ServiceSetup
     {
         string bin = $"\"{Exe}\"";
         bool exists = ServiceController.GetServices().Any(s => s.ServiceName == Name);
-        int r = Sc(exists ? "config" : "create", Name, "binPath=", bin, "start=", "auto", "obj=", "LocalSystem", "DisplayName=", "WPods Bluetooth Service");
+        int r = Sc(exists ? "config" : "create", Name, "binPath=", bin, "start=", "auto", "obj=", "LocalSystem",
+            "DisplayName=", BluetoothServiceIdentity.Product + " Bluetooth Service");
         if (r != 0)
         {
             return r;
         }
-        Sc("description", Name, "Runs the Bluetooth adapter for WPods: the AirPods control channel and the WPods microphone.");
+        Sc("description", Name, "Provides the AirPods control channel and microphone for " + BluetoothServiceIdentity.Product + ".");
         // Restart after 1 s, then 5 s; the third failure within 10 minutes gives the adapter back (--guard).
         if (Sc("failure", Name, "reset=", "600", "actions=", "restart/1000/restart/5000/run/0", "command=", $"{bin} --guard") != 0
             || Sc("failureflag", Name, "1") != 0)
@@ -179,18 +182,13 @@ internal static class ServiceSetup
     public static int Uninstall()
     {
         Engine.Uninstalling = true;
-        int stopped = Stop(keepAdapter: false);
+        if (Stop(keepAdapter: false) != 0 || !Engine.RestoreNative())
+        {
+            return 1;
+        }
+        // Keep the service and recovery records until the adapter has been restored.
         bool exists = ServiceController.GetServices().Any(s => s.ServiceName == Name);
         if (exists && Sc("delete", Name) != 0)
-        {
-            return 1;
-        }
-        if (stopped != 0)
-        {
-            return 1;
-        }
-        // The state stays while an adapter could not be given back: --restore-native needs it.
-        if (!Engine.RestoreNative())
         {
             return 1;
         }
@@ -219,7 +217,8 @@ internal static class ServiceSetup
 
     private static int Sc(params string[] args)
     {
-        var psi = new ProcessStartInfo("sc.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "sc.exe"))
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
         foreach (string a in args)
         {
             psi.ArgumentList.Add(a);

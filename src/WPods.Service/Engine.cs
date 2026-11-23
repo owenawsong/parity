@@ -37,7 +37,9 @@ internal sealed class Engine
     private TcpClient? _micClient;
     private int _micPort;
     private int _busIds;
+#if !PARITY_BLUETOOTH
     private bool _relaunched;
+#endif
     private bool _suspended;
     private volatile bool _resumeRestart;
     private RadioLink? _link;
@@ -244,8 +246,10 @@ internal sealed class Engine
         }
     }
 
+#if !PARITY_BLUETOOTH
     /// <summary>Null while an update is being installed at start.</summary>
     public Updater? Updater { get; private set; }
+#endif
 
     /// <summary>Set by "--stop" before Setup replaces the files, so an update keeps the adapter on WinUSB.</summary>
     public static bool KeepAdapterOnStop
@@ -262,6 +266,17 @@ internal sealed class Engine
     {
         KeepAdapterOnStop = false;
         WaitsForRestart = false;
+#if PARITY_BLUETOOTH
+        _ = _status.RunAsync(_stop.Token);
+        using (var legacy = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\WPodsService"))
+        {
+            if (legacy is not null)
+            {
+                SetState(ServiceState.Unsupported, "conflicting-service");
+                return;
+            }
+        }
+#else
         WPods.Service.Updater.ProtectDataFolder();
         _ = _status.RunAsync(_stop.Token);
         // A downloaded update installs before any takeover; if Setup fails, the service starts as usual.
@@ -276,12 +291,15 @@ internal sealed class Engine
             SetState(ServiceState.Updating, "installing an update");
             return;
         }
+#endif
         StartRunning();
     }
 
     private void StartRunning()
     {
+#if !PARITY_BLUETOOTH
         Updater = new Updater(_status.BroadcastUpdate);
+#endif
         // A device removed in Settings must also lose its hidden twin on the other adapter.
         _removedWatch = RadioDriver.WatchRemovedBluetoothDevices(id =>
         {
@@ -310,7 +328,9 @@ internal sealed class Engine
         _supervisor?.Join(10000);
         _micThread?.Join(5000);
         _server?.Dispose();
+#if !PARITY_BLUETOOTH
         Updater?.Dispose();
+#endif
         if (restoreNative)
         {
             RestoreNative();
@@ -369,6 +389,7 @@ internal sealed class Engine
         });
     }
 
+#if !PARITY_BLUETOOTH
     public void AppStarted()
     {
         if (MicCapturing || _hci.CallAudioActive)
@@ -378,6 +399,7 @@ internal sealed class Engine
         }
         Updater?.AppStarted();
     }
+#endif
 
     /// <summary>The app asks to take the adapter over again (after the Guard or when no adapter was found).</summary>
     public void Retry()
@@ -487,12 +509,14 @@ internal sealed class Engine
         {
             _running.Reset();
         }
+#if !PARITY_BLUETOOTH
         if (state is not (ServiceState.Starting or ServiceState.Updating) && !_relaunched)
         {
             // Reopens the app if it closed for an update, once the outcome is known, so it can show it.
             _relaunched = true;
             ThreadPool.QueueUserWorkItem(_ => WPods.Service.Updater.RelaunchApp());
         }
+#endif
         _status.Broadcast(state, detail);
     }
 

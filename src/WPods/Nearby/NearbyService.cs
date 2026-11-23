@@ -67,6 +67,7 @@ public sealed partial class NearbyService : IDisposable
     private nint _radioNotify;
     private bool _expiryArmed;
     private bool _disposed;
+    private volatile bool _hardwareControlsAvailable = !BluetoothServiceIdentity.IsParity;
     private int _generation;
     private NearbyOffer[] _offers = [];
     // Under _lock: valid proximity adverts that resolve to no paired AirPods, logged as one count per 10 s.
@@ -178,12 +179,18 @@ public sealed partial class NearbyService : IDisposable
     /// </summary>
     public Task ConnectAsync(ulong address) => ConnectAsync(address, null);
 
+    public void SetHardwareControlsAvailable(bool available) => _hardwareControlsAvailable = available;
+
     private async Task ConnectAsync(ulong address, long? automaticCycle)
     {
         var link = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Pair? pair;
         lock (_lock)
         {
+            if (!_hardwareControlsAvailable)
+            {
+                return;
+            }
             if (!_pairs.TryGetValue(address, out pair) || pair.Offer is not { State: OfferState.Offer or OfferState.Failed } offer)
             {
                 Log.Info("nearby", $"connect {Mac.Format(address)}: ignored, offer state={pair?.Offer?.State.ToString() ?? "none"}");
@@ -215,7 +222,7 @@ public sealed partial class NearbyService : IDisposable
         {
             lock (_lock)
             {
-                return !_disposed && pair.Link == link &&
+                return _hardwareControlsAvailable && !_disposed && pair.Link == link &&
                     (!automaticCycle.HasValue || (pair.OfferCycle == automaticCycle && !pair.Reconnect.Held &&
                     _connections.DisconnectFinished(address).IsCompleted &&
                     _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(address)) &&
@@ -721,7 +728,8 @@ public sealed partial class NearbyService : IDisposable
         }
         pair.Offer = new NearbyOffer(pair.Address, pair.Name, model, batteries, OfferState.Offer);
         long cycle = ++pair.OfferCycle;
-        if (AppIdentity.IsPairside && !pair.Reconnect.Held && _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(pair.Address)))
+        if (_hardwareControlsAvailable && AppIdentity.IsPairside && !pair.Reconnect.Held &&
+            _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(pair.Address)))
             _ = Task.Run(() => ConnectAsync(pair.Address, cycle));
         Log.Info("nearby", $"offer {Mac.Format(pair.Address)} created ({model.Name})");
         return true;

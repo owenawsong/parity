@@ -195,7 +195,7 @@ try {
     Install-AppFiles $source $install
     if ($RegisterUninstall) { Register-ParityUninstaller }
     if (!$StageDirectory) {
-        if ($Live) { Initialize-LiveProfile }
+        if ($Live -and (!$packaged -or $manifest.bluetooth -ne 'parity')) { Initialize-LiveProfile }
         New-ParityShortcut
     }
 } finally {

@@ -46,7 +46,7 @@ try {
     if ($live) {
         Add-Type -AssemblyName System.Windows.Forms
         if ([Windows.Forms.MessageBox]::Show(
-            'Remove Parity from this PC? Your preferences and the shared WPods Bluetooth service will stay installed.',
+            'Remove Parity from this PC? Parity will keep your preferences. If you added AirPods controls, Windows will ask for approval to restore the Bluetooth adapter.',
             'Uninstall Parity', 'YesNo', 'Question') -ne 'Yes') { exit 0 }
     }
 
@@ -57,6 +57,25 @@ try {
             throw 'Quit Parity from its tray menu before uninstalling.'
         }
         $paths = @(foreach ($entry in $manifest.files) { Get-ManagedPath $entry.path })
+        if ($live -and $manifest.bluetooth -eq 'parity') {
+            $folder = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'Parity Bluetooth'
+            $remover = Join-Path $folder 'Remove-ParityBluetooth.ps1'
+            $component = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Parity\Installer' -ErrorAction SilentlyContinue).OwnsBluetoothFolder
+            if ($component -eq 1 -or (Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\ParityBluetoothService')) {
+                Assert-PhysicalPath $folder
+                Assert-PhysicalPath $remover
+                $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
+                $result = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList (
+                    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $remover
+                ) -WindowStyle Hidden -Wait -PassThru
+                if ($result.ExitCode -notin 0, 3010) {
+                    throw 'Parity kept the desktop app installed so you can retry Bluetooth removal.'
+                }
+                if ($result.ExitCode -eq 3010) {
+                    [void][Windows.Forms.MessageBox]::Show('Restart Windows when convenient to finish removing the USB/IP driver.', 'Parity', 'OK', 'Information')
+                }
+            }
+        }
         $folders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($path in $paths) {
             if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }

@@ -99,7 +99,7 @@ NSNet2 (Microsoft DNS-Challenge), commit 5582dcf5ba43155621de72a035eb54a7d233af1
              (native\export\export_nsnet2.py in the WPods source repository). The weights are unchanged.
 
 usbip-win2 (Vadym Hrynchyshyn)
-  Files:     usbip-win2 USB/IP client drivers (Microsoft-signed), installed silently by Setup
+  Files:     usbip-win2 USB/IP client and signed drivers, bundled for the optional Bluetooth component
   Copyright: Copyright (c) 2021-2026, Vadym Hrynchyshyn <vadimgrn@gmail.com>
   License:   BSD 2-Clause License (text below)
   Source:    https://github.com/vadimgrn/usbip-win2
