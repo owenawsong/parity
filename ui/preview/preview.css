@@ -1,0 +1,203 @@
+:root {
+  color-scheme: dark;
+  --desktop: #171719;
+  --top: #1f1f22;
+  --stage: #151517;
+  --chrome: #1c1c1f;
+  --line: #ffffff20;
+  --text: #f3f5fa;
+  --muted: #adb8cd;
+  --accent: #a7cdff;
+  --hover: #ffffff12;
+  --shadow: #03071385;
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --desktop: #eaeaec;
+  --top: #f3f3f5;
+  --stage: #e7e7e9;
+  --chrome: #f2f2f4;
+  --line: #1d385b25;
+  --text: #172435;
+  --muted: #45536d;
+  --accent: #1555a3;
+  --hover: #1d385b0e;
+  --shadow: #20335437;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; color: var(--text); background: var(--desktop); }
+a, button, input, select, summary { font: inherit; color: inherit; }
+button, summary, select { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.desktop {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+.toolbar {
+  min-height: 57px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 22px;
+  background: var(--top);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 9px; }
+.brand-mark, .tray-button {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+svg { width: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pairside-mark { fill: currentColor; stroke: none; }
+h1 { margin: 0; font-size: 17px; letter-spacing: -.025em; font-weight: 650; }
+.preview-label { color: var(--muted); font-size: 12px; border-inline-start: 1px solid var(--line); padding-inline-start: 14px; }
+.toolbar-link { margin-inline-start: auto; white-space: nowrap; text-decoration: none; font-size: 12px; color: var(--accent); }
+.toolbar-link:hover { text-decoration: underline; }
+.workspace {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  background: var(--stage);
+}
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 21px 15px;
+  background: color-mix(in srgb, var(--top) 86%, transparent);
+  border-inline-end: 1px solid var(--line);
+}
+.control-group { display: grid; gap: 5px; min-width: 0; }
+.preview-check { display: flex; gap: 6px; align-items: center; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.control-group label, summary { font-size: 12px; color: var(--muted); }
+.control-group select {
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--desktop);
+  font-size: 12px;
+}
+details { border-top: 1px solid var(--line); padding-top: 10px; }
+details .control-group { margin-top: 12px; }
+#window-controls label { display: flex; justify-content: space-between; gap: 4px; }
+output { color: var(--text); font-variant-numeric: tabular-nums; }
+input[type='range'] { width: 100%; accent-color: var(--accent); margin: 2px 0 7px; }
+.stage {
+  min-width: 0;
+  min-height: 430px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--chrome);
+  border-radius: 15px;
+  box-shadow: 0 20px 68px var(--shadow), 0 3px 12px var(--shadow);
+  animation: appear 180ms cubic-bezier(.18,.7,.3,1) both;
+  overflow: hidden;
+}
+.surface[data-mode='tray'] {
+  align-self: end;
+  margin-inline-start: auto;
+  width: 346px;
+  border-radius: 15px;
+}
+.surface[data-mode='full'] { width: var(--window-width, 704px); }
+iframe {
+  display: block;
+  width: 100%;
+  height: var(--tray-height, 318px);
+  border: 0;
+}
+.surface[data-mode='full'] iframe { height: var(--window-height, 640px); }
+.surface[data-mode='tray'] .resize-grip { display: none; }
+.resize-grip {
+  position: absolute;
+  inset: auto 0 0 auto;
+  width: 22px;
+  height: 22px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.resize-grip::before {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid var(--muted);
+  border-bottom: 1px solid var(--muted);
+  border-radius: 0 0 2px 0;
+  opacity: .65;
+}
+.taskbar {
+  min-height: 47px;
+  display: flex;
+  justify-content: end;
+  align-items: center;
+  padding: 5px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--top);
+}
+.tray-button {
+  width: 38px;
+  height: 33px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+.tray-button:hover, .tray-button[aria-expanded='true'] { background: var(--hover); border-color: var(--line); }
+.tray-button svg { width: 20px; }
+@keyframes appear { from { opacity: 0; translate: 0 5px; } to { opacity: 1; translate: 0; } }
+@media (max-width: 740px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; border: 0; border-bottom: 1px solid var(--line); }
+  .controls details { grid-column: 1 / -1; }
+  .stage { padding: 12px; }
+}
+@media (max-width: 430px) {
+  .preview-label { display: none; }
+  .toolbar { padding-inline: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .surface { animation: none; } }
+
+html[data-desktop], html[data-desktop] body { height: 100%; overflow: hidden; }
+html[data-desktop] .toolbar,
+html[data-desktop] .controls,
+html[data-desktop] .taskbar,
+html[data-desktop] .resize-grip { display: none; }
+html[data-desktop] .desktop,
+html[data-desktop] .workspace,
+html[data-desktop] .stage { display: block; width: 100%; height: 100%; min-height: 0; padding: 0; }
+html[data-desktop] .surface {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+html[data-desktop] iframe { flex: 1; min-height: 0; }

@@ -66,7 +66,7 @@ export const createEnhancement = (ctx: Ctx): Page => {
   };
 
   const el = (
-    <div class="wp-page">
+    <div class="wp-page wp-preferences wp-preferences--stack wp-mic-enhance">
       <section class="wp-group">
         <div
           class="wp-list"
@@ -82,14 +82,14 @@ export const createEnhancement = (ctx: Ctx): Page => {
     '',
     Choice('radio', bindText('mic.off'), () => {
       pick(null);
-    }),
+    }, <span class="wp-row__desc" l:text="mic.enh.offHelp" /> as HTMLSpanElement),
   );
   for (const option of store.micCatalog.enhancement) {
     rows.set(
       option.id,
       Choice('radio', bindText(enhancementKey(option.id)), () => {
         pick(option.id);
-      }),
+      }, <span class="wp-row__desc">{bindText(enhancementKey(option.id + 'Help'))}</span> as HTMLSpanElement),
     );
   }
   for (const row of rows.values()) {

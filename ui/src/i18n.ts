@@ -2,13 +2,15 @@ import type en from '../../src/WPods/locales/en-US.json';
 
 export type LabelKey = keyof (typeof en)['labels'];
 type Vars = Record<string, string | number>;
-type TextBinding = { node: Text; key: LabelKey };
-type AttrBinding = { el: Element; name: string; key: LabelKey };
+type Binding =
+  | { text: WeakRef<Text>; key: LabelKey }
+  | { element: WeakRef<Element>; name: string; key: LabelKey };
 
 const root = document.documentElement;
 let labels: Record<string, string> = {};
-const texts: TextBinding[] = [];
-const attrs: AttrBinding[] = [];
+const bindings = new Set<Binding>();
+// Pages may keep their detached trees for Back navigation. Removed rows can be collected.
+const removedBindings = new FinalizationRegistry<Binding>(binding => bindings.delete(binding));
 
 export let labelsVersion = 0;
 
@@ -68,14 +70,18 @@ export const shown = (s: string): string => hyphenate(s);
 
 export const bindText = (key: LabelKey): Text => {
   const node = document.createTextNode(shown(t(key)));
-  texts.push({ node, key });
+  const binding = { text: new WeakRef(node), key };
+  bindings.add(binding);
+  removedBindings.register(node, binding);
 
   return node;
 };
 
 export const bindAttr = (el: Element, name: string, key: LabelKey): void => {
   el.setAttribute(name, t(key));
-  attrs.push({ el, name, key });
+  const binding = { element: new WeakRef(el), name, key };
+  bindings.add(binding);
+  removedBindings.register(el, binding);
 };
 
 /** Applies a language; `onHyphenation` fires once its patterns have loaded, if the language is still current. */
@@ -85,17 +91,31 @@ export const setLabels = (
   rtl: boolean,
   onHyphenation: () => void,
 ): void => {
-  labels = next;
+  labels = {
+    'battery.buds': 'AirPods',
+    'status.nearby': 'Nearby',
+    'home.hintNearby': 'Your AirPods are nearby and ready to connect.',
+    'battery.caseLastSeen': 'Seen {age}',
+    'battery.liveCase': 'Live from case',
+    'battery.source.case': 'Received from the charging case',
+    'battery.source.earbuds': 'Received from the earbuds',
+    'battery.justNow': 'just now',
+    'battery.lastSeen': '{reading}, last seen {age}',
+    'battery.unavailable': '{part} battery unavailable',
+    ...next,
+  };
   labelsVersion++;
   root.lang = lang;
   root.dir = rtl ? 'rtl' : 'ltr';
   const ready = hyphenators.get(lang);
   hyphenate = ready ?? plain;
-  for (const b of texts) {
-    b.node.data = shown(t(b.key));
-  }
-  for (const b of attrs) {
-    b.el.setAttribute(b.name, t(b.key));
+  for (const binding of bindings) {
+    if ('text' in binding) {
+      const text = binding.text.deref();
+      if (text) text.data = shown(t(binding.key));
+    } else {
+      binding.element.deref()?.setAttribute(binding.name, t(binding.key));
+    }
   }
   const load = PATTERNS[lang] ?? PATTERNS[lang.split('-')[0]];
   if (ready || !load) {

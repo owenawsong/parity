@@ -9,6 +9,7 @@ public enum OfferState
 {
     Offer,
     Connecting,
+    AutoConnecting,
     Connected,
     /// <summary>Windows rejected the connect request, no link within 10 s, or attaching failed; Retry = connect again.</summary>
     Failed,
@@ -17,17 +18,35 @@ public enum OfferState
 /// <summary>One nearby pair offered for connecting.</summary>
 public sealed record NearbyOffer(ulong Address, string Name, AirPodsModel Model, PodBatteries Batteries, OfferState State);
 
+internal readonly record struct CaseSignal(double Dbm, long SeenTick, bool Direct)
+{
+    public const int FreshMs = 20_000;
+
+    public static CaseSignal? Observe(CaseSignal? previous, short rssi, bool direct)
+    {
+        if (rssi is < -126 or >= 0)
+        {
+            return previous;
+        }
+        long now = Environment.TickCount64;
+        double level = previous is { } last && now - last.SeenTick < FreshMs
+            ? 0.6 * last.Dbm + 0.4 * rssi
+            : rssi;
+        return new(level, now, direct);
+    }
+}
+
 /// <summary>
 /// Mac-like nearby popup logic. Always scans passively; an advert counts only when its address resolves with the IRK
 /// of a paired AirPods that has proximity keys and whose link to Windows is down. An offer appears when that pair's lid
-/// opens (first advert with the lid open after closed or unseen) with at least one bud in the case; closing the lid
-/// removes it unless it is connecting. <see cref="Dismiss"/> removes it, and only the next opening shows it again.
+/// opens (first advert with the lid open after closed or unseen) with at least one bud in the case. Closing the lid
+/// removes an idle offer. <see cref="Dismiss"/> removes it, and only the next opening shows it again.
 /// Single-battery models (AirPods Max) have no lid or case signal: their offer appears when the pair starts advertising
 /// after being gone, and a dismissal lasts until it is gone again. 45 s without adverts = gone (offer removed, lid state forgotten).
 /// <see cref="OffersChanged"/> fires on thread-pool threads (BLE, CM notification, timer or connect continuation),
 /// only on a real change; handlers must not block and should read <see cref="Offers"/>.
 /// </summary>
-public sealed class NearbyService : IDisposable
+public sealed partial class NearbyService : IDisposable
 {
     private const long GoneMs = 45_000;
     private const short LostRssi = -127;
@@ -56,6 +75,8 @@ public sealed class NearbyService : IDisposable
     // Under _lock: adverts of a paired AirPods dropped because the encrypted block does not confirm them, same logging.
     private int _drops;
     private long _dropWindowStart;
+    private bool _caseFrameSeen;
+    private bool _caseFrameRejected;
 
     public NearbyService(ConnectionManager connections)
     {
@@ -69,10 +90,47 @@ public sealed class NearbyService : IDisposable
     public event Action? OffersChanged;
 
     /// <summary>
-    /// <see cref="IsNearby"/> changed for some pair. Same threading as <see cref="OffersChanged"/>; handlers must not
-    /// block and should call <see cref="IsNearby"/>.
+    /// A pair's nearby status or observed case lid changed. Same threading as <see cref="OffersChanged"/>;
+    /// handlers must not block.
     /// </summary>
     public event Action? NearbyChanged;
+
+    /// <summary>A charging case reported a fresh battery reading. Raised on the BLE thread.</summary>
+    internal event Action? CaseBatteryChanged;
+
+    internal PodBatteries? GetNearbyBatteries(ulong address)
+    {
+        lock (_lock)
+        {
+            return _pairs.TryGetValue(address, out Pair? pair) && pair.Nearby ? pair.ObservedBatteries : null;
+        }
+    }
+
+    internal CaseBroadcast? GetCaseBroadcast(ulong address)
+    {
+        lock (_lock)
+        {
+            return _pairs.GetValueOrDefault(address)?.CaseBroadcast;
+        }
+    }
+
+    internal CaseSignal? GetCaseSignal(ulong address)
+    {
+        lock (_lock)
+        {
+            if (!_pairs.TryGetValue(address, out Pair? pair))
+            {
+                return null;
+            }
+            long now = Environment.TickCount64;
+            if (pair.CaseSignal is { } direct && (now - direct.SeenTick < CaseSignal.FreshMs
+                || direct.SeenTick >= (pair.InCaseSignal?.SeenTick ?? long.MinValue)))
+            {
+                return direct;
+            }
+            return pair.InCaseSignal;
+        }
+    }
 
     /// <summary>
     /// A paired AirPods' case lid opened, or a bud left the case (proximity adverts), whatever the link state. Raised on
@@ -92,11 +150,21 @@ public sealed class NearbyService : IDisposable
         }
     }
 
+    /// <summary>The last observed lid position while the pair is still advertising nearby.</summary>
+    public bool? CaseLidOpen(ulong address)
+    {
+        lock (_lock)
+        {
+            return _pairs.TryGetValue(address, out Pair? pair) && pair.Present ? pair.LidOpen : null;
+        }
+    }
+
     public unsafe void Start()
     {
         Log.Info("nearby", "start");
         _self = GCHandle.Alloc(this);
         _connections.LinkChanged += OnLinkChanged;
+        if (AppIdentity.IsPairside) _connections.DisconnectRequested += OnDisconnectRequested;
         _connections.DevicesChanged += Refresh;
         Refresh();
         // A radio that is switched back on (or plugged in) re-arrives as an interface; the helper's watcher has stopped by then.
@@ -108,7 +176,9 @@ public sealed class NearbyService : IDisposable
     /// User clicked Connect (or Retry): asks Windows to connect audio, waits up to 10 s for the link, then switches the
     /// session to this pair. The only place that pages the AirPods.
     /// </summary>
-    public async Task ConnectAsync(ulong address)
+    public Task ConnectAsync(ulong address) => ConnectAsync(address, null);
+
+    private async Task ConnectAsync(ulong address, long? automaticCycle)
     {
         var link = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Pair? pair;
@@ -119,6 +189,13 @@ public sealed class NearbyService : IDisposable
                 Log.Info("nearby", $"connect {Mac.Format(address)}: ignored, offer state={pair?.Offer?.State.ToString() ?? "none"}");
                 return;
             }
+            // A delayed automatic request belongs only to the opening that created it.
+            // Leave other active pairs and manual connections in progress alone.
+            if (automaticCycle.HasValue && (_disposed || pair.OfferCycle != automaticCycle ||
+                offer.State != OfferState.Offer || pair.Reconnect.Held || !_connections.DisconnectFinished(address).IsCompleted ||
+                !_connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(address)) ||
+                _connections.Session != null || _pairs.Values.Any(p => p.LinkUp || p.Link != null)))
+                return;
             pair.Link = link;
             // SetLinkUp completes the wait only when the link comes up; a Retry after a failed attach finds it up already.
             if (pair.LinkUp)
@@ -134,14 +211,29 @@ public sealed class NearbyService : IDisposable
         // One 10 s budget for link up and attach. A refused request (hr < 0) still waits: Windows or the AirPods may
         // connect anyway, and only "no link" or "no attach" within the budget is a failure.
         long deadline = Environment.TickCount64 + (long)ConnectTimeout.TotalMilliseconds;
+        bool RequestIsCurrent()
+        {
+            lock (_lock)
+            {
+                return !_disposed && pair.Link == link &&
+                    (!automaticCycle.HasValue || (pair.OfferCycle == automaticCycle && !pair.Reconnect.Held &&
+                    _connections.DisconnectFinished(address).IsCompleted &&
+                    _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(address)) &&
+                    (_connections.Session is not { } current || current.Address == address)));
+            }
+        }
         try
         {
-            int hr = await Task.Run(() => NearbyNative.wpn_bt_connect_audio(address)).ConfigureAwait(false);
+            int hr = await Task.Run(() =>
+            {
+                if (!RequestIsCurrent()) throw new TaskCanceledException();
+                return NearbyNative.wpn_bt_connect_audio(address);
+            }).ConfigureAwait(false);
             Log.Info("nearby", $"connect {Mac.Format(address)}: connect audio hr=0x{hr:X8}");
             await link.Task.WaitAsync(Remaining(deadline)).ConfigureAwait(false);
             Log.Info("nearby", $"connect {Mac.Format(address)}: link up, attaching");
-            bool attached = await _connections.ConnectAsync(address).ConfigureAwait(false)
-                || await WaitForAttachAsync(address, deadline).ConfigureAwait(false);
+            bool attached = await _connections.ConnectAsync(address, RequestIsCurrent).ConfigureAwait(false)
+                || (RequestIsCurrent() && await WaitForAttachAsync(address, deadline).ConfigureAwait(false));
             Log.Info("nearby", $"connect {Mac.Format(address)}: attached={attached}");
             if (attached)
             {
@@ -213,15 +305,15 @@ public sealed class NearbyService : IDisposable
         }
     }
 
-    /// <summary>Stops waiting for every connect in progress; those offers go back to <see cref="OfferState.Offer"/>.</summary>
-    public void CancelConnect()
+    /// <summary>Stops waiting for the specified pair, or all pending connects when omitted; their offers go back to <see cref="OfferState.Offer"/>.</summary>
+    public void CancelConnect(ulong? address = null)
     {
         bool changed = false;
         lock (_lock)
         {
             foreach (Pair pair in _pairs.Values)
             {
-                if (pair.Link is not null && pair.Offer is { } offer)
+                if ((address is null || address == pair.Address) && pair.Link is not null && pair.Offer is { } offer)
                 {
                     pair.CancelConnect();
                     pair.Offer = offer with { State = OfferState.Offer };
@@ -265,6 +357,7 @@ public sealed class NearbyService : IDisposable
     {
         Log.Info("nearby", "dispose");
         _connections.LinkChanged -= OnLinkChanged;
+        _connections.DisconnectRequested -= OnDisconnectRequested;
         _connections.DevicesChanged -= Refresh;
         if (_radioNotify != 0)
         {
@@ -273,6 +366,10 @@ public sealed class NearbyService : IDisposable
         lock (_scanLock)
         {
             _disposed = true;
+#if PAIRSIDE_LIVE
+            StopWindowsWatcher();
+            Volatile.Write(ref _nativeWatcherStarted, false);
+#endif
             NearbyNative.wpn_ble_stop();
         }
         lock (_lock)
@@ -302,7 +399,7 @@ public sealed class NearbyService : IDisposable
         {
             if (rssi != LostRssi && GCHandle.FromIntPtr(context).Target is NearbyService self)
             {
-                self.HandleAdvert(address, addressType, new ReadOnlySpan<byte>(data, (int)length));
+                self.HandleAdvert(address, addressType, rssi, new ReadOnlySpan<byte>(data, (int)length));
             }
         }
         catch (Exception e)
@@ -324,28 +421,81 @@ public sealed class NearbyService : IDisposable
 
     // The helper's watcher stops silently when it aborts (e.g. radio off); stop + start revives it.
     // A failed start (no radio) is retried on the next radio arrival or link-up.
-    private unsafe void RestartScan()
+    private unsafe bool RestartScan(bool finderChange = false)
     {
         lock (_scanLock)
         {
             if (_disposed)
             {
-                return;
+                return false;
             }
+#if PAIRSIDE_LIVE
+            bool finderActive = Volatile.Read(ref _finderRequested) != 0 && !_passiveOnly;
+            if (finderChange && _windowsWatcher?.Status == Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcherStatus.Started && _windowsFinderActive == finderActive)
+            {
+                return true;
+            }
+#endif
             NearbyNative.wpn_ble_stop();
+#if PAIRSIDE_LIVE
+            StopWindowsWatcher();
+            Volatile.Write(ref _nativeWatcherStarted, false);
+            if (TryStartWindowsWatcher(finderActive) || (finderActive && TryStartWindowsWatcher(false)))
+            {
+                return true;
+            }
+#endif
             int hr = NearbyNative.wpn_ble_start(&OnAdvert, GCHandle.ToIntPtr(_self));
+#if PAIRSIDE_LIVE
+            Volatile.Write(ref _nativeWatcherStarted, hr >= 0);
+#endif
             Log.Info("nearby", $"BLE watcher restarted, hr=0x{hr:X8}");
+            return hr >= 0;
         }
     }
 
-    private void HandleAdvert(ulong address, byte addressType, ReadOnlySpan<byte> data)
+    internal void OnSystemResume()
     {
-        if (!Proximity.IsValid(address, addressType, data))
+        if (!AppIdentity.IsPairside) return;
+        _ = Task.Run(async () =>
         {
-            return;
+            Log.Info("nearby", "resuming discovery after Windows wake");
+            if (RestartScan()) return;
+            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            RestartScan(finderChange: true);
+        });
+    }
+
+    private void OnDisconnectRequested(ulong address)
+    {
+        lock (_lock)
+        {
+            if (!_pairs.TryGetValue(address, out Pair? pair)) return;
+            pair.Reconnect.Hold(pair.Present && !pair.LidOpen);
+            ++pair.OfferCycle;
         }
+    }
+
+    private void HandleAdvert(ulong address, byte addressType, short rssi, ReadOnlySpan<byte> data)
+    {
+        while (Proximity.TryReadField(ref data, out ReadOnlySpan<byte> field))
+        {
+            if (Proximity.IsCaseBroadcast(field))
+            {
+                HandleCaseBroadcast(rssi, field);
+            }
+            else if (Proximity.IsValid(address, addressType, field))
+            {
+                HandlePairedAdvert(address, rssi, field);
+            }
+        }
+    }
+
+    private void HandlePairedAdvert(ulong address, short rssi, ReadOnlySpan<byte> data)
+    {
         bool changed;
         bool nearbyChanged;
+        bool caseChanged;
         ulong caseOpened = 0;
         lock (_lock)
         {
@@ -366,17 +516,32 @@ public sealed class NearbyService : IDisposable
             // The resolved address never expires and bytes 5-8 are clear: an advert counts only when its encrypted
             // levels confirm the clear ones, so a captured advert with flipped bits does nothing.
             AirPodsModel model = pair.Offer?.Model ?? Models.FromProximityId(Proximity.ModelId(data)) ?? Models.FromModelNumber(pair.ModelNumber) ?? Models.Unknown;
-            if (Proximity.ReadBatteries(data, pair.EncCipher, model.SingleBattery, pair.Offer?.Batteries ?? default) is not { } batteries)
+            if (Proximity.ReadBatteries(data, pair.EncCipher, model.SingleBattery, pair.Offer?.Batteries ?? default,
+                out PodBatteries observed) is not { } batteries)
             {
                 CountAndLog(ref _drops, ref _dropWindowStart, "dropped (encrypted levels do not confirm the clear ones)");
                 return;
             }
+            pair.ObservedModel = Models.FromProximityId(Proximity.ModelId(data)) ?? pair.ObservedModel;
+            Battery caseSample = observed.Case;
+            if (Proximity.HasDockedEarbudSignal(data, observed))
+            {
+                pair.InCaseSignal = CaseSignal.Observe(pair.InCaseSignal, rssi, direct: false);
+            }
+            else if (!Proximity.IsBudInCase(data))
+            {
+                pair.InCaseSignal = null;
+            }
             bool wasNearby = pair.Nearby;
+            bool wasPresent = pair.Present;
             bool wasOpen = pair.LidOpen;
             bool wasBudInCase = pair.BudInCase;
             changed = Update(pair, data, model, batteries);
-            nearbyChanged = pair.Nearby != wasNearby;
-            if (((!wasOpen && pair.LidOpen) || (wasBudInCase && !pair.BudInCase)) && Models.FromModelNumber(pair.ModelNumber)?.SingleBattery != true)
+            caseChanged = caseSample.Percent is not null && StoreCaseReading(pair, caseSample, direct: false);
+            nearbyChanged = pair.Nearby != wasNearby || (!model.SingleBattery && (!wasPresent || wasOpen != pair.LidOpen))
+                || (pair.Nearby && pair.ObservedBatteries != observed);
+            pair.ObservedBatteries = observed;
+            if (!pair.Reconnect.Held && ((!wasOpen && pair.LidOpen) || (wasBudInCase && !pair.BudInCase)) && Models.FromModelNumber(pair.ModelNumber)?.SingleBattery != true)
             {
                 caseOpened = pair.Address;
             }
@@ -386,6 +551,10 @@ public sealed class NearbyService : IDisposable
             }
         }
         Raise(changed, nearbyChanged);
+        if (caseChanged)
+        {
+            CaseBatteryChanged?.Invoke();
+        }
         if (caseOpened != 0)
         {
             CaseOpened?.Invoke(caseOpened);
@@ -419,6 +588,87 @@ public sealed class NearbyService : IDisposable
         return null;
     }
 
+    private void HandleCaseBroadcast(short rssi, ReadOnlySpan<byte> data)
+    {
+        bool changed;
+        lock (_lock)
+        {
+            if (!_caseFrameSeen)
+            {
+                _caseFrameSeen = true;
+                Log.Info("nearby", "Windows delivered a charging-case battery record");
+            }
+            Pair? match = null;
+            Battery battery = default;
+            AirPodsModel? pro3 = Models.FromProximityId(0x2027);
+            int candidates = 0;
+            bool anyKnownHeader = false;
+            foreach (Pair pair in _pairs.Values)
+            {
+                if ((pair.ObservedModel ?? Models.FromModelNumber(pair.ModelNumber)) != pro3)
+                {
+                    continue;
+                }
+                candidates++;
+                bool valid = Proximity.TryReadCaseBroadcast(data, pair.EncCipher, out Battery reading, out bool knownHeader);
+                anyKnownHeader |= knownHeader;
+                if (!valid)
+                {
+                    continue;
+                }
+                if (match is not null)
+                {
+                    return;
+                }
+                match = pair;
+                battery = reading;
+            }
+            if (match is null)
+            {
+                if (!_caseFrameRejected)
+                {
+                    _caseFrameRejected = true;
+                    Log.Info("nearby", $"case record had no valid paired reading: paired Pro 3 candidates={candidates}, expected format decoded={anyKnownHeader}");
+                }
+                return;
+            }
+            if (!match.DirectCaseSeen && battery.Percent is not null)
+            {
+                match.DirectCaseSeen = true;
+                Log.Info("nearby", "received battery telemetry from a paired charging case");
+            }
+            match.CaseSignal = CaseSignal.Observe(match.CaseSignal, rssi, direct: true);
+            changed = battery.Percent is not null && StoreCaseReading(match, battery, direct: true);
+        }
+        if (changed)
+        {
+            CaseBatteryChanged?.Invoke();
+        }
+    }
+
+    // Under _lock. A missing battery never refreshes the timestamp of the previous value.
+    private static bool StoreCaseReading(Pair pair, Battery battery, bool direct)
+    {
+        long now = Environment.TickCount64;
+        if (!direct && pair.CaseBroadcast is { Direct: true } && now - pair.LastCaseReceived < GoneMs)
+        {
+            return false;
+        }
+        bool changed = pair.CaseBroadcast is not { } previous || previous.Battery != battery || previous.Direct != direct;
+        if (pair.CaseBroadcast is null && !direct)
+        {
+            Log.Info("nearby", "received a case battery reading relayed by paired earbuds");
+        }
+        pair.CaseBroadcast = new(battery, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), direct);
+        pair.LastCaseReceived = now;
+        if (!changed && now - pair.LastCasePublished < 10_000)
+        {
+            return false;
+        }
+        pair.LastCasePublished = now;
+        return true;
+    }
+
     // Under _lock. model and batteries come from HandleAdvert's check of the advert.
     private bool Update(Pair pair, ReadOnlySpan<byte> data, AirPodsModel model, PodBatteries batteries)
     {
@@ -437,6 +687,7 @@ public sealed class NearbyService : IDisposable
         }
         bool wasOpen = pair.LidOpen;
         pair.LidOpen = Proximity.IsLidOpen(data);
+        if (!model.SingleBattery) pair.Reconnect.ObserveLid(pair.LidOpen);
         bool budInCase = Proximity.IsBudInCase(data);
         if (arrived || wasOpen != pair.LidOpen || budInCase != pair.BudInCase)
         {
@@ -446,7 +697,7 @@ public sealed class NearbyService : IDisposable
         pair.InClosedCase = !pair.LidOpen && Proximity.AreBothInCase(data);
         if (pair.Offer is { } offer)
         {
-            if (!offer.Model.SingleBattery && !pair.LidOpen && offer.State != OfferState.Connecting)
+            if (!offer.Model.SingleBattery && !pair.LidOpen && offer.State is OfferState.Offer or OfferState.Failed)
             {
                 Log.Info("nearby", $"offer {Mac.Format(pair.Address)} removed: lid closed (was {offer.State})");
                 pair.Offer = null;
@@ -469,6 +720,9 @@ public sealed class NearbyService : IDisposable
             return false;
         }
         pair.Offer = new NearbyOffer(pair.Address, pair.Name, model, batteries, OfferState.Offer);
+        long cycle = ++pair.OfferCycle;
+        if (AppIdentity.IsPairside && !pair.Reconnect.Held && _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(pair.Address)))
+            _ = Task.Run(() => ConnectAsync(pair.Address, cycle));
         Log.Info("nearby", $"offer {Mac.Format(pair.Address)} created ({model.Name})");
         return true;
     }
@@ -493,8 +747,11 @@ public sealed class NearbyService : IDisposable
                     next = Math.Min(next, due);
                     continue;
                 }
-                nearbyChanged |= pair.Nearby;
+                // Expiry also clears the observed lid for a connected pair.
+                nearbyChanged = true;
                 pair.Present = false;
+                if ((pair.ObservedModel ?? Models.FromModelNumber(pair.ModelNumber))?.SingleBattery == true)
+                    pair.Reconnect.EndHeadphoneVisit();
                 pair.LidOpen = false;
                 Log.Info("nearby", $"{Mac.Format(pair.Address)} gone (no adverts for 45 s), offer={pair.Offer?.State.ToString() ?? "none"}");
                 if (pair.Offer is { State: OfferState.Offer or OfferState.Failed })
@@ -538,31 +795,71 @@ public sealed class NearbyService : IDisposable
         // No radio-state event exists in Core; a link coming up also means the radio is on.
         if (up)
         {
-            ThreadPool.QueueUserWorkItem(static s => s.RestartScan(), this, preferLocal: false);
+            ThreadPool.QueueUserWorkItem(static s => s.RestartScan(finderChange: true), this, preferLocal: false);
         }
     }
 
-    // Under _lock. A link that comes up ends a connect wait; an idle or failed offer disappears (connected to Windows).
-    private static bool SetLinkUp(Pair pair, bool up)
+    // Under _lock. Windows can bring the link up while the user is looking at an idle offer.
+    private bool SetLinkUp(Pair pair, bool up)
     {
-        if (pair.LinkUp != up)
+        bool changed = pair.LinkUp != up;
+        if (changed)
         {
             Log.Info("nearby", $"{Mac.Format(pair.Address)} link {(up ? "up" : "down")}, connect waiting={pair.Link is not null}, offer={pair.Offer?.State.ToString() ?? "none"}");
         }
         pair.LinkUp = up;
         if (!up)
         {
+            if (changed && pair.Offer is { State: OfferState.AutoConnecting or OfferState.Connected } interrupted)
+            {
+                RestoreIdleOffer(pair, interrupted);
+                return true;
+            }
             return false;
         }
         pair.Link?.TrySetResult();
-        if (pair.Offer is { State: OfferState.Offer or OfferState.Failed } offer)
+        if (changed && pair.Offer is { State: OfferState.Offer or OfferState.Failed } offer)
         {
-            Log.Info("nearby", $"offer {Mac.Format(pair.Address)} removed: link up (was {offer.State})");
-            pair.Offer = null;
+            pair.Offer = offer with { State = OfferState.AutoConnecting };
+            int attempt = ++pair.AutoConnectAttempt;
+            long deadline = Environment.TickCount64 + (long)ConnectTimeout.TotalMilliseconds;
+            _ = Task.Run(() => ObserveWindowsConnectAsync(pair, attempt, deadline));
             return true;
         }
         return false;
     }
+
+    private async Task ObserveWindowsConnectAsync(Pair pair, int attempt, long deadline)
+    {
+        // Wait for the attach already triggered by the Windows link. This path never pages the AirPods.
+        bool attached = await WaitForAttachAsync(pair.Address, deadline).ConfigureAwait(false);
+        lock (_lock)
+        {
+            if (!_pairs.TryGetValue(pair.Address, out Pair? current) || current != pair ||
+                pair.AutoConnectAttempt != attempt || !pair.LinkUp ||
+                pair.Offer is not { State: OfferState.AutoConnecting } offer)
+            {
+                return;
+            }
+            if (attached && _connections.Session?.Address == pair.Address)
+            {
+                pair.Offer = offer with { State = OfferState.Connected };
+            }
+            else
+            {
+                RestoreIdleOffer(pair, offer);
+            }
+            Log.Info("nearby", $"offer {Mac.Format(pair.Address)} after Windows reconnect: {pair.Offer?.State.ToString() ?? "none"}");
+            Publish();
+        }
+        OffersChanged?.Invoke();
+    }
+
+    // Under _lock. A fresh manual offer makes sense only while the device is still nearby and available.
+    private static void RestoreIdleOffer(Pair pair, NearbyOffer offer) =>
+        pair.Offer = pair.Present && (offer.Model.SingleBattery || pair.LidOpen)
+            ? offer with { State = OfferState.Offer }
+            : null;
 
     // Pairs = paired AirPods with proximity keys. Serialized so an older device list never overwrites a newer one.
     private void Refresh()
@@ -616,7 +913,7 @@ public sealed class NearbyService : IDisposable
                         pair.CancelConnect();
                         pair.Dispose();
                         changed |= pair.Offer is not null;
-                        nearbyChanged |= pair.Nearby;
+                        nearbyChanged |= pair.Present;
                         keysChanged = true;
                     }
                 }
@@ -679,16 +976,27 @@ public sealed class NearbyService : IDisposable
         public Aes EncCipher { get; private set; } = null!;
         public string Name { get; set; } = "";
         public string? ModelNumber { get; set; }
+        public AirPodsModel? ObservedModel { get; set; }
         public bool LinkUp { get; set; }
         public bool Present { get; set; }
+        public NearbyReconnect Reconnect { get; } = new();
         public bool LidOpen { get; set; }
         /// <summary>Last advert's bud-in-case flag; only used to log changes.</summary>
         public bool BudInCase { get; set; }
         /// <summary>Last advert: lid closed with both buds in the case (the case sends a short burst, then goes silent).</summary>
         public bool InClosedCase { get; set; }
+        public PodBatteries ObservedBatteries { get; set; }
         public long LastSeen { get; set; }
         public int Generation { get; set; }
+        public long OfferCycle { get; set; }
+        public int AutoConnectAttempt { get; set; }
         public NearbyOffer? Offer { get; set; }
+        public CaseBroadcast? CaseBroadcast { get; set; }
+        public CaseSignal? CaseSignal { get; set; }
+        public CaseSignal? InCaseSignal { get; set; }
+        public bool DirectCaseSeen { get; set; }
+        public long LastCaseReceived { get; set; }
+        public long LastCasePublished { get; set; }
         public bool Nearby => Present && !LinkUp && !InClosedCase;
         /// <summary>Completed when the link comes up during a connect; cancelled to abandon the connect.</summary>
         public TaskCompletionSource? Link { get; set; }
@@ -702,6 +1010,12 @@ public sealed class NearbyService : IDisposable
             }
             Dispose();
             _keys = keys;
+            CaseBroadcast = null;
+            CaseSignal = null;
+            InCaseSignal = null;
+            DirectCaseSeen = false;
+            ObservedModel = null;
+            ObservedBatteries = default;
             IrkCipher = Proximity.CreateIrkCipher(keys.Irk);
             EncCipher = Proximity.CreateCipher(keys.EncKey);
             return true;

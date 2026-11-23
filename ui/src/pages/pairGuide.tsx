@@ -1,17 +1,17 @@
 import { PairSteps } from '../components/common';
-import { post } from '../host';
+import { isPairside, post } from '../host';
 import { Icon } from '../icons';
-import type { Page } from './page';
+import type { Ctx, Page } from './page';
 
-export const createPairGuide = (): Page => {
+export const createPairGuide = (ctx: Ctx): Page => {
   const el = (
-    <div class="wp-page">
+    <div class="wp-page wp-pair-page">
       <div class="wp-empty">
         <PairSteps />
         <div class="wp-empty__actions">
           <button
             type="button"
-            class="wp-btn wp-btn--primary wp-btn--lg wp-btn--block"
+            class="wp-btn wp-btn--primary wp-btn--lg"
             onclick={() => {
               post({ type: 'openAddDevice' });
             }}
@@ -20,6 +20,7 @@ export const createPairGuide = (): Page => {
             <span l:text="pair.addDevice" />
           </button>
         </div>
+        {isPairside ? <button type="button" class="wp-link" l:text="diagnostics.title" onclick={() => ctx.go('advanced', 'diagnostics')} /> : ''}
       </div>
     </div>
   ) as HTMLDivElement;

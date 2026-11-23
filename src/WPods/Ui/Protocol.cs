@@ -16,11 +16,16 @@ internal sealed class PageMessage
 {
     public string Type { get; set; } = "";
     public string? Id { get; set; }
+    public string? TrackId { get; set; }
+    public long? PositionMs { get; set; }
+    public long? WindowStartMs { get; set; }
+    public long? WindowEndMs { get; set; }
     public string? Mode { get; set; }
     public string? Name { get; set; }
     public string? Side { get; set; }
     public string? Theme { get; set; }
     public string? Code { get; set; }
+    public int Request { get; set; }
     public JsonElement Value { get; set; }
     public string[]? Ids { get; set; }
     public string[]? Modes { get; set; }
@@ -88,13 +93,21 @@ internal sealed class MessageWriter
         w.WriteEndObject();
     }
 
-    public static void WriteBatteries(Utf8JsonWriter w, string name, Battery left, Battery right, Battery @case, Battery headphone)
+    public static void WriteBatteries(Utf8JsonWriter w, string name, Battery left, Battery right, Battery @case, Battery headphone,
+        CaseBatteryReading? lastCase = null)
     {
         w.WriteStartObject(name);
         WriteBattery(w, "left", left);
         WriteBattery(w, "right", right);
         WriteBattery(w, "case", @case);
         WriteBattery(w, "headphone", headphone);
+        if (lastCase is not null)
+        {
+            w.WriteStartObject("lastCase");
+            w.WriteNumber("pct", lastCase.Percent);
+            w.WriteNumber("seenAt", lastCase.SeenAt);
+            w.WriteEndObject();
+        }
         w.WriteEndObject();
     }
 
@@ -102,7 +115,7 @@ internal sealed class MessageWriter
     public static void WriteBatteries(Utf8JsonWriter w, DeviceState s)
     {
         DeviceState b = s.BatterySource;
-        WriteBatteries(w, "battery", b.LeftBattery, b.RightBattery, b.CaseBattery, b.HeadphoneBattery);
+        WriteBatteries(w, "battery", b.LeftBattery, b.RightBattery, b.CaseBattery, b.HeadphoneBattery, s.LastCaseReading);
     }
 
     /// <summary>
@@ -139,7 +152,12 @@ internal sealed class MessageWriter
         }
     }
 
-    public static void WriteListeningMode(Utf8JsonWriter w, DeviceState s) => WriteEnum(w, "listeningMode", Shown(s).ListeningMode);
+    public static void WriteListeningMode(Utf8JsonWriter w, DeviceState s)
+    {
+        DeviceState.ModeSelection selection = s.ListeningModeSelection;
+        WriteEnum(w, "listeningMode", selection.Mode ?? (IsChecking(s) ? s.RememberedSettings.ListeningMode : null));
+        w.WriteBoolean("listeningModePending", selection.Pending);
+    }
 
     public static void WriteHeartRate(Utf8JsonWriter w, DeviceState s)
     {
@@ -151,7 +169,29 @@ internal sealed class MessageWriter
     /// Every device-side setting except the listening mode (fields of the "settings" message). Ear detection, mic
     /// side and allow off are per-host values (stored, set from attach on); the others are pod-saved, see <see cref="Shown"/>.
     /// </summary>
-    public static void WriteSettingFields(Utf8JsonWriter w, DeviceState s) => WriteSettingFields(w, Shown(s), s.EarDetection, s.AllowOff, s.MicSide);
+    public static void WriteSettingFields(Utf8JsonWriter w, DeviceState s)
+    {
+        WriteSettingFields(w, Shown(s), s.EarDetection, s.AllowOff, s.MicSide);
+        WriteNumber(w, "callMutePresses", s.CallMutePresses);
+        WriteBool(w, "optimizedCharging", s.OptimizedCharging);
+        WriteOnboardEq(w, s.CustomEq);
+        w.WriteBoolean("adaptiveVolumeReported", s.AdaptiveVolumeReported);
+    }
+
+    private static void WriteOnboardEq(Utf8JsonWriter w, OnboardEq? eq)
+    {
+        if (eq is not { } value)
+        {
+            w.WriteNull("onboardEq");
+            return;
+        }
+        w.WriteStartObject("onboardEq");
+        w.WriteBoolean("enabled", value.Enabled);
+        w.WriteNumber("low", value.Low);
+        w.WriteNumber("mid", value.Mid);
+        w.WriteNumber("high", value.High);
+        w.WriteEndObject();
+    }
 
     private static void WriteSettingFields(Utf8JsonWriter w, PodSettings pod, bool? earDetection, bool? allowOff, MicSide? micSide)
     {
@@ -164,6 +204,7 @@ internal sealed class MessageWriter
         WriteEnum(w, "pressSpeed", pod.PressSpeed);
         WriteEnum(w, "holdDuration", pod.HoldDuration);
         WriteNumber(w, "toneVolume", pod.ToneVolume);
+        WriteNumber(w, "adaptiveStrength", pod.AdaptiveStrength);
         WriteBool(w, "hearingAidEnrolled", pod.HearingAidEnrolled);
         w.WriteBoolean("hearingAidEnabled", pod.HearingAidEnabled);
         WriteBool(w, "mediaAssistCalls", pod.MediaAssistCalls);
@@ -214,6 +255,9 @@ internal sealed class MessageWriter
         w.WriteStartObject("host");
         w.WriteBoolean("disableHandsFree", host.DisableHandsFree);
         w.WriteBoolean("lowLatency", host.LowLatency);
+        w.WriteBoolean("lowLatencyMic", host.LowLatencyMic);
+        w.WriteBoolean("sleepPause", host.SleepPause);
+        w.WriteNumber("earResumeSeconds", EarPlaybackPolicy.Window(host.EarResumeSeconds));
         w.WriteString("micMode", Camel(host.MicMode));
         w.WriteNumber("duckPercent", host.DuckPercent);
         w.WriteEndObject();
@@ -346,17 +390,35 @@ internal sealed class MessageWriter
     /// for the pair (display while not attached).
     /// </summary>
     public static void WriteDevice(Utf8JsonWriter w, KnownDevice d, string conn, PodBatteries? batteries, HostSettings host,
-        PodSettings saved, bool earDetection, bool allowOff, MicSide micSide)
+        PodSettings saved, bool earDetection, bool allowOff, MicSide micSide, bool? caseOpen, CaseBroadcast? caseBroadcast, CaseBatteryReading? rememberedCase = null)
     {
         AirPodsModel model = Models.FromModelNumber(d.ModelNumber) ?? Models.Unknown;
         w.WriteStartObject();
         w.WriteString("id", Mac.Format(d.Address));
         w.WriteString("name", d.Name);
         w.WriteString("model", model.Name);
+        w.WriteBoolean("stereoMicSupported", model.StereoMic);
         w.WriteString("art", model.Art);
         WriteCaps(w, d.Capabilities, model.SingleBattery);
         w.WriteString("conn", conn);
+        WriteBool(w, "caseOpen", caseOpen);
         w.WriteBoolean("hasKeys", d.HasKeys);
+        if (rememberedCase is not null)
+        {
+            w.WriteStartObject("rememberedCase");
+            w.WriteNumber("pct", rememberedCase.Percent);
+            w.WriteNumber("seenAt", rememberedCase.SeenAt);
+            w.WriteEndObject();
+        }
+        if (caseBroadcast is { Battery.Percent: { } percent } reading)
+        {
+            w.WriteStartObject("caseBroadcast");
+            w.WriteNumber("pct", percent);
+            w.WriteBoolean("charging", reading.Battery.Status == BatteryStatus.Charging);
+            w.WriteNumber("seenAt", reading.SeenAt);
+            w.WriteString("source", reading.Direct ? "case" : "earbuds");
+            w.WriteEndObject();
+        }
         if (batteries is { } b)
         {
             WriteBatteries(w, "batteries", b.Left, b.Right, b.Case, b.Headphone);
@@ -419,6 +481,7 @@ internal sealed class MessageWriter
         w.WriteStartObject();
         w.WriteString("id", Mac.Format(offer.Address));
         w.WriteString("name", offer.Name);
+        w.WriteString("model", offer.Model.Name);
         w.WriteString("art", offer.Model.Art);
         PodBatteries b = offer.Batteries;
         WriteBatteries(w, "batteries", b.Left, b.Right, b.Case, b.Headphone);

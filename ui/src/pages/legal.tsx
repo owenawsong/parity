@@ -71,7 +71,7 @@ const Section = (p: {
 
 export const createLegal = (): Page => {
   const el = (
-    <div class="wp-page">
+    <div class="wp-page wp-legal-page">
       <section
         class="wp-card wp-disclaimer"
         aria-labelledby="legalAdapterTitle"

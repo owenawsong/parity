@@ -83,6 +83,27 @@ internal sealed class Localization
                 labels.TryAdd(key, text);
             }
         }
+        labels["app.name"] = AppIdentity.Name;
+        if (AppIdentity.IsPairside)
+        {
+            // Keep the upstream project and service names in their legal and service messages.
+            foreach (string key in labels.Keys.ToArray())
+            {
+                if (key.StartsWith("firstRun.", StringComparison.Ordinal) ||
+                    key.StartsWith("pair.", StringComparison.Ordinal) ||
+                    key.StartsWith("adapter.", StringComparison.Ordinal) ||
+                    key.StartsWith("hotkeys.", StringComparison.Ordinal) ||
+                    key.StartsWith("update.", StringComparison.Ordinal) ||
+                    key is "tray.open" or "tray.quit" or "legal.firstRunBody" or "legal.notAppleBody" or
+                        "legal.trademarksBody" or "legal.ownFeaturesTitle" or "legal.ownFeaturesBody" or
+                        "legal.thirdPartyBody" or "legal.warrantyBody" ||
+                    key is "mic.note" or "restart.body" or "windows.handsFreeDesc" or "osd.conflict" or
+                        "toast.micModelFailed" or "toast.settingsReset" or "toast.webviewFailed" or "toast.restartToFinish")
+                {
+                    labels[key] = labels[key].Replace("WPods", AppIdentity.Name, StringComparison.Ordinal);
+                }
+            }
+        }
         string language = Subtag(code);
         bool rtl = language.Equals("ar", StringComparison.OrdinalIgnoreCase) || language.Equals("he", StringComparison.OrdinalIgnoreCase)
             || language.Equals("fa", StringComparison.OrdinalIgnoreCase) || language.Equals("ur", StringComparison.OrdinalIgnoreCase);

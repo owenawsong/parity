@@ -1,16 +1,16 @@
 import { Choice, createChoiceList } from '../components/choiceList';
-import { Note } from '../components/common';
 import { WeightMeter } from '../components/weightMeter';
-import { setText } from '../dom';
+import { setDisabled, setText } from '../dom';
 import { post } from '../host';
 import { bindText, labelsVersion, t } from '../i18n';
+import { Icon } from '../icons';
 import type { MicMode, MicOption } from '../protocol';
 import { applyMicConfig, current, effectiveMode, live, store } from '../state';
 import { createCheck, createLoading, type Mark } from './enhancement';
-import type { Ctx, Page } from './page';
+import type { Ctx } from './page';
 
 type Hint = { el: HTMLSpanElement; option: MicOption };
-type ModelGroup = { rows: Map<string, HTMLButtonElement>; check: Mark };
+type ModelGroup = { rows: Map<string, HTMLButtonElement>; check: Mark; summary: HTMLSpanElement };
 
 const MODES: MicMode[] = ['standard', 'voiceIsolation', 'wideSpectrum'];
 const MODE_MIN = 1;
@@ -18,7 +18,7 @@ const RAW = 'raw';
 // MMAC/s from which the hint shows GMAC/s.
 const GMAC = 1000;
 
-export const createMicModes = (ctx: Ctx): Page => {
+export const createProcessingModels = (ctx: Ctx) => {
   const modes = createChoiceList<MicMode>({
     items: [
       { value: 'standard', label: 'mic.standard' },
@@ -50,8 +50,7 @@ export const createMicModes = (ctx: Ctx): Page => {
 
   let modeList!: HTMLDivElement;
   const el = (
-    <div class="wp-page">
-      {Note({ label: 'mic.note' })}
+    <div class="wp-mic-models wp-tool-details__body">
       <section class="wp-group">
         <h2
           class="wp-group__title"
@@ -70,19 +69,25 @@ export const createMicModes = (ctx: Ctx): Page => {
   ) as HTMLDivElement;
   modeList.append(...modes.rows);
 
+  const modelOptions = <section class="wp-mic-tools wp-mic-models__choices" l:aria-label="mic.modelsTitle" /> as HTMLElement;
+  el.append(<p class="wp-row__desc wp-mic-models__intro" l:text="mic.modelDesc" />, modelOptions);
   for (const mode of MODES) {
+    let summary!: HTMLSpanElement;
     const titleId = `${mode}ModelsTitle`;
     let list!: HTMLDivElement;
-    el.append(
-      <section class="wp-group">
-        <h2 class="wp-group__title" id={titleId} l:text={`mic.${mode}`} />
+    modelOptions.append(
+      <details class="wp-tool-details">
+        <summary>
+          <span id={titleId} l:text={`mic.${mode}`} />
+          <span class="wp-mic-current" ref={summary} /><Icon name="chevron-down" />
+        </summary>
         <div
           class="wp-list"
           role="radiogroup"
           aria-labelledby={titleId}
           ref={list}
         />
-      </section>,
+      </details>,
     );
     const rows = new Map<string, HTMLButtonElement>();
     for (const option of store.micCatalog[mode]) {
@@ -119,7 +124,7 @@ export const createMicModes = (ctx: Ctx): Page => {
       rows.set(option.id, row);
       list.append(row);
     }
-    groups[mode] = { rows, check: createCheck() };
+    groups[mode] = { rows, check: createCheck(), summary };
   }
 
   const renderHints = (): void => {
@@ -153,9 +158,12 @@ export const createMicModes = (ctx: Ctx): Page => {
       renderHints();
     }
     const models = store.micConfig.models;
-    for (const mode of MODES) {
+    for (const [index, mode] of MODES.entries()) {
       modes.set(mode, store.micEnabled.has(mode));
+      setDisabled(modes.rows[index], store.micEnabled.size === 1 && store.micEnabled.has(mode));
       const group = groups[mode];
+      const model = store.micCatalog[mode].find(option => option.id === models[mode]);
+      setText(group.summary, model?.id === RAW ? t('mic.raw') : model?.name ?? '');
       group.check(group.rows.get(models[mode]) ?? null);
     }
     const d = current();
@@ -167,5 +175,5 @@ export const createMicModes = (ctx: Ctx): Page => {
     );
   };
 
-  return { el, sections: { mic: render } };
+  return { el, render };
 };

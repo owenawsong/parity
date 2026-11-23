@@ -38,15 +38,13 @@ export const createOfferList = (o: {
   onPick: (id: DeviceId) => void;
   onNotNow: () => void;
 }): OfferList => {
-  let sub!: HTMLParagraphElement;
   let picks!: HTMLDivElement;
   let first: HTMLButtonElement | null = null;
   const byId = new Map<DeviceId, PickButton>();
   const el = (
     <div class="wp-popup__view" hidden>
       <div class="wp-popup__head">
-        <p class="wp-popup__name" l:text="popup.multiTitle" />
-        <p class="wp-popup__sub" ref={sub} />
+        <h2 class="wp-popup__name" l:text="popup.multiTitle" />
       </div>
       <div class="wp-popup__list" ref={picks} />
       <div class="wp-popup__actions">
@@ -63,6 +61,13 @@ export const createOfferList = (o: {
   const createPick = (offer: Offer): PickButton => {
     let name!: HTMLSpanElement;
     let meta!: HTMLSpanElement;
+    const model = offer.model && AIRPODS_LOCAL_POPUPS && Object.hasOwn(AIRPODS_LOCAL_POPUPS, offer.model)
+      ? AIRPODS_LOCAL_POPUPS[offer.model] : null;
+    const art = model ? document.createElement('img') : Glyph({ name: offer.art === 'max' ? 'max' : 'pair' });
+    if (model && art instanceof HTMLImageElement) {
+      art.src = model.standard.poster;
+      art.alt = '';
+    }
     const btn = (
       <button
         type="button"
@@ -70,9 +75,22 @@ export const createOfferList = (o: {
         onclick={() => {
           o.onPick(offer.id);
         }}
+        onkeydown={(event) => {
+          const row = event.currentTarget as HTMLButtonElement;
+          let target: Element | null;
+          switch (event.key) {
+            case 'ArrowDown': target = row.nextElementSibling ?? picks.firstElementChild; break;
+            case 'ArrowUp': target = row.previousElementSibling ?? picks.lastElementChild; break;
+            case 'Home': target = picks.firstElementChild; break;
+            case 'End': target = picks.lastElementChild; break;
+            default: return;
+          }
+          event.preventDefault();
+          if (target instanceof HTMLButtonElement) target.focus();
+        }}
       >
         <span class="wp-pick__art">
-          <Glyph name={offer.art === 'max' ? 'max' : 'pair'} />
+          {art}
         </span>
         <span class="wp-pick__text">
           <span class="wp-pick__name" ref={name} />
@@ -89,17 +107,6 @@ export const createOfferList = (o: {
     el,
     render: (offers) => {
       const n = offers.length;
-      setText(
-        sub,
-        t(
-          n === 2
-            ? 'popup.multiSubTwo'
-            : n === 3
-              ? 'popup.multiSubThree'
-              : 'popup.multiSubOther',
-          { count: n },
-        ),
-      );
       /* Keyed by offer id so a still-present button keeps its focus. A removed focused button hands focus to the pick
          now at its position, or to the last pick. */
       const active = document.activeElement;
@@ -126,8 +133,10 @@ export const createOfferList = (o: {
           pick = createPick(offer);
           byId.set(offer.id, pick);
         }
-        setText(pick.name, offer.name);
-        setText(pick.meta, batteryMeta(offer.batteries));
+        const name = offer.name.trim() || offer.model || t('home.yourAirPods');
+        const meta = batteryMeta(offer.batteries);
+        setText(pick.name, name);
+        setText(pick.meta, meta || (offer.model !== name ? offer.model ?? '' : ''));
         if (at !== pick.btn) {
           picks.insertBefore(pick.btn, at);
           if (pick.btn === active) {

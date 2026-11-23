@@ -28,7 +28,7 @@ internal static class Log
     // Set after every enqueue; an entry added during a drain leaves it set, so the next round writes it.
     private static readonly AutoResetEvent Pending = new(initialState: false);
     private static readonly Lock WriteLock = new();
-    private static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WPods", "logs");
+    private static readonly string Folder = Path.Combine(AppIdentity.Profile, "logs");
     private static readonly string FilePath = Path.Combine(Folder, "wpods.log");
 
     // Under WriteLock.

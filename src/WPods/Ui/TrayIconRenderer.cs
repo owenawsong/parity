@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using WPods.Core;
 
 namespace WPods.Ui;
 
@@ -83,6 +84,7 @@ internal static unsafe partial class TrayIconRenderer
         bool on = glyph.Connected;
         int level = Math.Clamp(glyph.Level, 0, 100);
         bool mic = on && glyph.Mic;
+        bool idleMark = AppIdentity.IsPairside && !on;
 
         using var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
         using (Graphics graphics = Graphics.FromImage(bitmap))
@@ -91,8 +93,17 @@ internal static unsafe partial class TrayIconRenderer
             graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             graphics.Transform = fit;
             var ring = new RectangleF(g.C - g.R, g.C - g.R, 2 * g.R, 2 * g.R);
-            using (var track = new Pen(k.Track, g.W))
+            if (idleMark)
             {
+                // Without a battery reading, the device mark can use the space reserved for the ring.
+                graphics.TranslateTransform(g.C, g.C);
+                float enlargement = glyph.Device == TrayDevice.Buds ? 1.32f : 1.55f;
+                graphics.ScaleTransform(enlargement, enlargement);
+                graphics.TranslateTransform(-g.C, -g.C);
+            }
+            else
+            {
+                using var track = new Pen(k.Track, g.W);
                 graphics.DrawEllipse(track, ring);
             }
             if (on && level > 0)
@@ -110,7 +121,7 @@ internal static unsafe partial class TrayIconRenderer
                     graphics.DrawArc(arc, ring, -90, 360 * length / circumference);
                 }
             }
-            Color ink = on ? k.Ink : k.Faint;
+            Color ink = idleMark ? Color.FromArgb(203, k.Ink) : on ? k.Ink : k.Faint;
             if (on && glyph.Charging)
             {
                 using var brush = new SolidBrush(k.Green);
@@ -171,6 +182,11 @@ internal static unsafe partial class TrayIconRenderer
             }
             default:
             {
+                if (AppIdentity.IsPairside)
+                {
+                    DrawParityMark(graphics, g, brush);
+                    break;
+                }
                 // Heads and stems in one clockwise path, so overlaps unite under the winding rule.
                 using var buds = new GraphicsPath(FillMode.Winding);
                 AddCircle(buds, g.HeadLeftX, g.HeadY, g.HeadR);
@@ -181,6 +197,29 @@ internal static unsafe partial class TrayIconRenderer
                 break;
             }
         }
+    }
+
+    private static void DrawParityMark(Graphics graphics, Geometry g, Brush brush)
+    {
+        using var crescent = new GraphicsPath();
+        crescent.AddBezier(8.9f, 4.8f, 10.7f, 2.7f, 12.7f, 1.8f, 15.2f, 1.8f);
+        crescent.AddBezier(15.2f, 1.8f, 19.8f, 1.8f, 23, 5.5f, 23, 10);
+        crescent.AddBezier(23, 10, 23, 14.4f, 19.5f, 18.3f, 15.1f, 18.3f);
+        crescent.AddBezier(15.1f, 18.3f, 12.1f, 18.3f, 9.8f, 16.7f, 8.7f, 14.3f);
+        crescent.AddLine(8.7f, 14.3f, 12, 14.3f);
+        crescent.AddBezier(12, 14.3f, 15.2f, 14.3f, 17.4f, 12.1f, 17.4f, 9.4f);
+        crescent.AddBezier(17.4f, 9.4f, 17.4f, 6.7f, 15.2f, 4.8f, 12.3f, 4.8f);
+        crescent.CloseFigure();
+        using var mark = (GraphicsPath)crescent.Clone();
+        using var opposite = new Matrix(-1, 0, 0, -1, 24, 24);
+        crescent.Transform(opposite);
+        mark.AddPath(crescent, false);
+
+        float scale = g.R * 1.65f / 24;
+        float offset = g.C - 12 * scale;
+        using var fit = new Matrix(scale, 0, 0, scale, offset, offset);
+        mark.Transform(fit);
+        graphics.FillPath(brush, mark);
     }
 
     private static void AddCircle(GraphicsPath path, float cx, float cy, float r)

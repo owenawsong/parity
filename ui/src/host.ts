@@ -12,10 +12,12 @@ declare global {
   // oxlint-disable-next-line consistent-type-definitions
   interface Window {
     chrome?: { webview?: WebView };
+    pairsidePreviewHost?: WebView;
   }
 }
 
-const webview = window.chrome?.webview;
+const webview = window.pairsidePreviewHost ?? window.chrome?.webview;
+export const isPairside = Boolean(window.pairsidePreviewHost) || window.location?.hostname === 'app.pairside';
 
 export const post = (message: MainToHost | PopupToHost | OsdToHost): void => {
   webview?.postMessage(message);

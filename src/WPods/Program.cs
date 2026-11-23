@@ -28,18 +28,27 @@ internal static class Program
             }
         }
 
-        using var instance = new Mutex(initiallyOwned: true, @"Local\WPods", out bool firstInstance);
-        using var activation = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\WPods.Activate");
+        using var instance = new Mutex(initiallyOwned: true, @"Local\" + AppIdentity.InstallationId, out bool firstInstance);
+        using var activation = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\" + AppIdentity.InstallationId + ".Activate");
         if (!firstInstance)
         {
             NativeUi.AllowSetForegroundWindow(-1);
             activation.Set();
             return;
         }
+        // A single front end owns the service's AirPods control session and microphone at a time.
+        bool frontendAvailable = true;
+        using var frontend = AppIdentity.IsPairside ? new Mutex(true, @"Local\WPods", out frontendAvailable) : null;
+        if (!frontendAvailable)
+        {
+            MessageBox.Show("Quit WPods from its system tray menu before opening Parity.", AppIdentity.Name,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         RegisteredWaitHandle activationWait = ThreadPool.RegisterWaitForSingleObject(
             activation, static (_, _) => OnActivationRequested(), null, Timeout.Infinite, executeOnlyOnce: false);
 
-        Log.Info("app", $"start WPods {Application.ProductVersion} on Windows {Environment.OSVersion.Version} args=[{string.Join(' ', args)}] pid={Environment.ProcessId}");
+        Log.Info("app", $"start {AppIdentity.Name} {Application.ProductVersion} on Windows {Environment.OSVersion.Version} args=[{string.Join(' ', args)}] pid={Environment.ProcessId}");
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         AppDomain.CurrentDomain.ProcessExit += static (_, _) => Log.Flush();
         TaskScheduler.UnobservedTaskException += static (_, e) => Log.Error("app", "unobserved task exception", e.Exception);
@@ -54,7 +63,7 @@ internal static class Program
         {
             Log.Error("app", "no locales found");
             Log.Flush();
-            MessageBox.Show("No locales found", "WPods", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("No locales found", AppIdentity.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
         Log.Info("app", $"locales loaded: {string.Join(',', locales.Files.Keys)}");
@@ -65,7 +74,7 @@ internal static class Program
         var keepAlive = new LowLatencyKeepAlive(connections);
         var ducker = new ConversationDucker(connections, mic);
         var mixer = new Mixer(connections, mic);
-        _ = new EarPause(connections);
+        _ = new EarPause(connections, mic);
         var nearby = new NearbyService(connections);
         // Opening the case releases a pair the user disconnected while Windows still has its link up.
         nearby.CaseOpened += connections.OnCaseOpened;

@@ -21,6 +21,8 @@ internal static class Aap
     public const byte OneBudAncId = 0x1B;
     public const byte ToneVolumeId = 0x1F;
     public const byte PersonalizedVolumeId = 0x26;
+    public const byte SleepDetectionId = 0x35;
+    internal const byte OptimizedChargingId = 0x3B;
     public const byte ConversationAwarenessId = 0x28;
     public const byte HearingAidId = 0x2C;
     public const byte AdaptiveStrengthId = 0x2E;
@@ -122,7 +124,7 @@ internal static class Aap
                     return DeviceChange.None;
                 }
                 DeviceChange setting = p[6] == ListeningModeId
-                    ? (state.ReportListeningMode(p[7]) ? DeviceChange.ListeningMode : DeviceChange.None)
+                    ? (state.ReportListeningMode(p[7], Environment.TickCount64) ? DeviceChange.ListeningMode : DeviceChange.None)
                     : ApplySetting(p, state);
                 return setting | state.Observe(CapabilityOf(p[6], p[7]));
             case 0x17:
@@ -136,14 +138,36 @@ internal static class Aap
                 }
                 state.ConversationLevel = p[9];
                 return DeviceChange.ConversationLevel;
+            case 0x4C when p.Length >= 9 && BinaryPrimitives.ReadUInt16LittleEndian(p[6..]) == p.Length - 8:
+                if (state.AdaptiveVolumeReported || state.PersonalizedVolume != true) return DeviceChange.None;
+                state.AdaptiveVolumeReported = true;
+                return DeviceChange.Settings;
             case 0x53:
                 return IsMediaAssistRecord(p)
                     ? (state.SetMediaAssist(p) ? DeviceChange.Settings : DeviceChange.None) | state.Observe(DeviceCapabilities.MediaAssist)
                     : DeviceChange.None;
+            case 0x57 when p.Length == 15 && p[6] == 7 && p[7] == 0 && p[8] == 2 && p[9] <= 2:
+                if (state.SleepState == p[9]) return DeviceChange.None;
+                state.SleepState = p[9];
+                return DeviceChange.Sleep | state.Observe(DeviceCapabilities.SleepDetection);
+            case 0x63 when TryReadCustomEq(p) is { } eq:
+                if (state.CustomEq == eq) return DeviceChange.None;
+                state.CustomEq = eq;
+                return DeviceChange.Settings;
             default:
                 return DeviceChange.None;
         }
     }
+
+    // Custom EQ is the three-band record, separate from the 0x53 Hearing Assistance EQ.
+    internal static OnboardEq? TryReadCustomEq(ReadOnlySpan<byte> p) =>
+        p.Length == 13 && BinaryPrimitives.ReadUInt32LittleEndian(p) == Header &&
+        p[4] == 0x63 && p[5] == 0 && p[6] == 5 && p[7] == 0 && p[8] == 1 &&
+        p[9] is 1 or 2 && p[10] <= 100 && p[11] <= 100 && p[12] <= 100
+            ? new OnboardEq(p[9] == 2, p[10], p[11], p[12]) : null;
+
+    internal static byte[] CustomEqPacket(OnboardEq eq) =>
+        [0x04, 0, 0x04, 0, 0x63, 0, 0x05, 0, 0x01, eq.Enabled ? (byte)2 : (byte)1, eq.Low, eq.Mid, eq.High];
 
     /// <summary>Parses the 0x31 reply: count, then {type u16, length u16, key} entries.</summary>
     public static bool TryParseKeys(ReadOnlySpan<byte> p, out ProximityKeys? keys)
@@ -257,16 +281,26 @@ internal static class Aap
         byte value = p[7];
         switch (id)
         {
-            case ListeningModeId:
-                return state.SetSetting(id, value) ? DeviceChange.ListeningMode : DeviceChange.None;
+            case OptimizedChargingId:
+                // Only the single-value version is understood. Other records must not expose a writable switch.
+                byte charge = p.Length == 11 && value is 1 or 2 && p[8] == 0 && p[9] == 0 && p[10] == 0 ? value : (byte)0xFF;
+                return state.SetSetting(id, charge) ? DeviceChange.Settings : DeviceChange.None;
+            case CallGesture.SettingId:
+                return state.SetSetting(id, CallGesture.Read(packet: p) ?? 0xFF) ? DeviceChange.Settings : DeviceChange.None;
+            case AdaptiveStrengthId:
+                return value <= 100 && state.SetSetting(id, value) ? DeviceChange.Settings : DeviceChange.None;
             case HearingAidId:
                 if (p.Length < 9)
                 {
                     return DeviceChange.None;
                 }
                 return state.SetSetting(id, value) | state.SetHearingAidEnabled(p[8]) ? DeviceChange.Settings : DeviceChange.None;
+            case PersonalizedVolumeId:
+                if (value is not (1 or 2) || !state.SetSetting(id, value)) return DeviceChange.None;
+                state.AdaptiveVolumeReported = false;
+                return DeviceChange.Settings;
             case MicSideId or EarDetectionId or PressSpeedId or HoldDurationId or OneBudAncId or ToneVolumeId
-                or PersonalizedVolumeId or ConversationAwarenessId or HearingAssistId or AllowOffId or StemModesId:
+                or ConversationAwarenessId or HearingAssistId or AllowOffId or StemModesId:
                 return state.SetSetting(id, value) ? DeviceChange.Settings : DeviceChange.None;
             default:
                 return DeviceChange.None;
@@ -283,6 +317,7 @@ internal static class Aap
         ConversationAwarenessId => DeviceCapabilities.ConversationAwareness,
         OneBudAncId => DeviceCapabilities.OneBudAnc,
         PersonalizedVolumeId => DeviceCapabilities.PersonalizedVolume,
+        SleepDetectionId when value is 1 or 2 => DeviceCapabilities.SleepDetection,
         AllowOffId => DeviceCapabilities.AllowOff,
         MicSideId => DeviceCapabilities.MicSide,
         PressSpeedId => DeviceCapabilities.PressSpeed,

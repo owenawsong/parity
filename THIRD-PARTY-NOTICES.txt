@@ -9,6 +9,12 @@ WPods itself is licensed under the GNU General Public License, version 3 (see LI
 Components
 ===============================================================================
 
+NAudio.Wasapi and NAudio.Core 2.2.1 (Pairside live build)
+  Files:     NAudio.Wasapi.dll, NAudio.Core.dll
+  Copyright: Copyright (c) 2023 Mark Heath
+  License:   MIT (text below)
+  Source:    https://github.com/naudio/NAudio
+
 FFmpeg 7.1.5
   Files:     avcodec-61.dll, avutil-59.dll, swresample-5.dll
   Copyright: Copyright (c) the FFmpeg developers (https://ffmpeg.org)
@@ -9503,3 +9509,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+MIT KEMAR head-related transfer functions · Spotify spatial audio
+Copyright 1994 by the MIT Media Laboratory.
+Measurements by Bill Gardner and Keith Martin, "HRTF Measurements of a KEMAR
+Dummy-Head Microphone", MIT Media Lab Perceptual Computing Report 280 (1994).
+https://sound.media.mit.edu/resources/KEMAR.html
+
+The authors permit research and commercial use with citation. Pairside uses
+their diffuse-field equalized, symmetric measurements, resampled to 48 kHz
+and interpolated to a regular directional grid.

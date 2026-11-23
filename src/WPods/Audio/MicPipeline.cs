@@ -10,9 +10,9 @@ public enum MicStatus
 {
     /// <summary>No app captures, or one captures while no AirPods are attached or Hands-Free has their mic.</summary>
     NotActive,
-    /// <summary>An app captures and AirPods are attached; no START written yet in this session.</summary>
+    /// <summary>An app captures and AirPods are attached; waiting for the AirPods to confirm capture.</summary>
     Starting,
-    /// <summary>A START was written or audio decoded; silence stays Live, as the AirPods send nothing while it is quiet.</summary>
+    /// <summary>The AirPods confirmed capture or audio decoded; silence stays Live, as the AirPods send nothing while it is quiet.</summary>
     Live,
     /// <summary>The virtual mic is unavailable, the decoder failed to load, a START write failed or no audio came.</summary>
     Problem,
@@ -122,7 +122,7 @@ public sealed class MicPipeline
     // Name of the attached pair at attach (the Windows name unless the AirPods already reported theirs).
     private string _pairName = "";
     private bool _startSent;
-    // A START write succeeded or audio was decoded in this session.
+    // The AirPods reported capture after a START, or actual audio decoded in this session.
     private bool _started;
     // The latest START write failed.
     private bool _startFailed;
@@ -187,6 +187,10 @@ public sealed class MicPipeline
 
     /// <summary>Each block of mic PCM (mono 48 kHz) as written to the virtual mic; raised on the mic thread, must not block.</summary>
     public event PcmHandler? Written;
+#if PAIRSIDE_LIVE
+    internal delegate void DecodedHandler(ReadOnlySpan<float> samples);
+    internal event DecodedHandler? Decoded;
+#endif
 
     /// <summary>
     /// Load state of a slot's newest request (pair address, 0 after detach; option id). The last argument is the failure
@@ -265,7 +269,7 @@ public sealed class MicPipeline
             HostSettings settings = _settings.Get(session.Address);
             _mode = settings.MicMode;
             _disableHandsFree = settings.DisableHandsFree;
-            _keepOn = settings.LowLatency;
+            _keepOn = settings.LowLatencyMic;
             MicConfig config = _settings.Mic;
             Log.Info("mic", $"session {Mac.Format(session.Address)} attached, mode={_mode} (runs {config.EffectiveMode(_mode)}), capturing={_capturing}, keep on={_keepOn}");
             RequestStagesLocked(config);
@@ -359,7 +363,7 @@ public sealed class MicPipeline
             session = _session;
             pairName = _pairName;
         }
-        if (session is null)
+        if (session is null || !Models.HasStereoMic(session.State.ModelNumber))
         {
             return;
         }
@@ -393,9 +397,9 @@ public sealed class MicPipeline
                 HoldLocked("Hands-Free enabled");
             }
             _disableHandsFree = settings.DisableHandsFree;
-            if (_keepOn != settings.LowLatency)
+            if (_keepOn != settings.LowLatencyMic)
             {
-                _keepOn = settings.LowLatency;
+                _keepOn = settings.LowLatencyMic;
                 ApplyStreamingLocked(_keepOn ? "low latency on" : "low latency off");
             }
         }
@@ -476,7 +480,7 @@ public sealed class MicPipeline
         ApplyStreamingLocked("capture started");
     }
 
-    private bool StreamingLocked => _capturing || _keepOn;
+    private bool StreamingLocked => (_capturing || _keepOn) && Models.HasStereoMic(_session?.State.ModelNumber);
 
     // The AirPods mic streams while someone listens or, in low latency mode, all the time.
     private void ApplyStreamingLocked(string reason)
@@ -574,6 +578,11 @@ public sealed class MicPipeline
             lock (_lock)
             {
                 _micOn = (packet[12] & 0x20) != 0;
+                if (_micOn && _startSent && !_started)
+                {
+                    _started = true;
+                    UpdateStatusLocked("mic on reported");
+                }
                 if (callAudio != _reportedCallAudio && _session is not null)
                 {
                     _reportedCallAudio = callAudio;
@@ -697,7 +706,7 @@ public sealed class MicPipeline
         {
             lock (_lock)
             {
-                if (_capturing && (!_started || _startFailed || _noAudio))
+                if (_capturing && _startSent && (!_started || _startFailed || _noAudio))
                 {
                     if (_noAudio)
                     {
@@ -915,6 +924,9 @@ public sealed class MicPipeline
         {
             return false;
         }
+#if PAIRSIDE_LIVE
+        Decoded?.Invoke(_pcm.AsSpan(_fill, samples));
+#endif
         foreach (float sample in _pcm.AsSpan(_fill, samples))
         {
             _inputMeter.Add(sample);
@@ -1034,6 +1046,7 @@ public sealed class MicPipeline
     // The config holds only listed ids (checked on load and by the page commands).
     private void RequestStagesLocked(MicConfig config)
     {
+        if (!Models.HasStereoMic(_session?.State.ModelNumber)) return;
         MicMode mode = config.EffectiveMode(_mode);
         _model.RequestLocked(MicCatalog.FindModel(mode, config.Models[mode]));
         _enhancement.RequestLocked(config.Enhancement is { } id ? MicCatalog.FindEnhancement(id) : null);
@@ -1074,10 +1087,6 @@ public sealed class MicPipeline
             {
                 return;
             }
-            if (ok)
-            {
-                _started = true;
-            }
             _startFailed = !ok;
             UpdateStatusLocked(ok ? "START written" : "START write failed");
         }
@@ -1110,7 +1119,7 @@ public sealed class MicPipeline
         {
             return;
         }
-        bool off = _session is null || _handsFreeAudio || _handsFreeMic;
+        bool off = _session is null || !Models.HasStereoMic(_session.State.ModelNumber) || _handsFreeAudio || _handsFreeMic;
         string? fault = off ? null : _nativeFailed ? "M1" : _startFailed ? "M2" : _noAudio ? "M5" : null;
         _faultCode = fault;
         SetStatusLocked(off ? MicStatus.NotActive : fault is not null ? MicStatus.Problem : _started ? MicStatus.Live : MicStatus.Starting, reason);

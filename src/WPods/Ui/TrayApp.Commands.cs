@@ -38,14 +38,189 @@ internal sealed partial class TrayApp
         {
             return;
         }
-        // A volume drag sends one preview per step; only the release is logged.
-        if (m.Type != "previewMixerVolume")
+        // Volume drags and compact layout transitions may send per-frame updates.
+        if (m.Type is not ("previewMixerVolume" or "previewOnboardEq" or "fitCompactHeight"))
         {
             Log.Info("ui", "main command " + Describe(m));
         }
         ulong id = Mac.TryParse(m.Id, out ulong address) ? address : 0;
         switch (m.Type)
         {
+#if PAIRSIDE_LIVE
+            case "readConnectionCheck" when m.Request > 0:
+                ReadConnectionCheck(m.Request);
+                break;
+            case "setAutomaticPulse" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                SetAutomaticPulse(id, m.Value.GetBoolean());
+                break;
+            case "watchPulse":
+                WatchPulse(id);
+                break;
+            case "readPulseFeed":
+                SendPulseFeed();
+                break;
+            case "setPulseFeed" when m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                ConfigurePulseFeed(m.Value.GetBoolean());
+                break;
+            case "rotatePulseFeed":
+                RotatePulseFeed();
+                break;
+            case "watchBatteryHistory":
+                WatchBatteryHistory(id, m.Name);
+                break;
+            case "setBatteryHistory" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                SetBatteryHistory(id, m.Value.GetBoolean());
+                break;
+            case "setChargeAlert" when m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetInt32(out int chargeTarget):
+                SetChargeAlert(id, m.Name, chargeTarget);
+                break;
+            case "startPulse" when id != 0:
+                StartPulse(id);
+                break;
+            case "watchAppleHeadphoneHistory" when m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                WatchAppleHistory(m.Value.GetBoolean());
+                break;
+            case "importAppleHeadphoneHistory":
+                ImportAppleHistory();
+                break;
+            case "cancelAppleHeadphoneImport":
+                _appleImport?.Cancel();
+                break;
+            case "clearAppleHeadphoneHistory":
+                ClearAppleHistory();
+                break;
+            case "endPulse" when id != 0 && _pulse.Address == id:
+                EndPulse(null);
+                break;
+            case "readPulse" when id != 0 && m.PositionMs is > 0 && m.Request > 0:
+                ReadPulse(id, m.PositionMs.Value, m.Request);
+                break;
+            case "readPulseWindow" when id != 0 && m.PositionMs is > 0 && m.Request > 0 &&
+                m.WindowStartMs is long from && from > 0 && m.WindowEndMs is long to && to > from && to - from <= PulseHistory.MaxChartSeconds * 1000L:
+                ReadPulseWindow(id, m.PositionMs.Value, from, to, m.Request);
+                break;
+            case "setPulseChart" when id != 0 && id == _pulseWatch:
+                if (m.Name == "window" && m.Value.ValueKind == JsonValueKind.Number &&
+                    m.Value.TryGetInt32(out int seconds) && PulseHistory.ValidChartWindow(seconds))
+                    SavePrefs(_prefs with { PulseWindowSeconds = seconds });
+                else if (m.Name == "scale" && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    SavePrefs(_prefs with { PulseSessionScale = m.Value.GetBoolean() });
+                SendLivePulse();
+                break;
+            case "deletePulse" when id != 0 && m.PositionMs is > 0:
+                DeletePulse(id, m.PositionMs.Value);
+                break;
+            case "usePairOutput" when id != 0:
+                UsePairOutput(id);
+                break;
+            case "readWindowsSpatial" or "openWindowsSpatial" when id != 0 && m.Request > 0:
+                RequestWindowsSpatial(id, m.Request, m.Type == "openWindowsSpatial");
+                break;
+            case "watchSpotifyRoom":
+                WatchSpotifyRoom(id);
+                break;
+            case "testSpatialSpeakers" when id != 0 && _spotifySession?.Address == id && _spotifyRoomViewer == id:
+                _spotify?.TestSpeakers();
+                break;
+            case "setSpatialPlayer" when SpatialApp.FromKey(m.Name) is { } player:
+                SetSpatialPlayer(player);
+                break;
+            case "setSpeakerAngle" when m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetInt32(out int angle) && angle is 20 or 30 or 55:
+                SavePrefs(_prefs with { SpatialSpeakerAngle = angle });
+                _spotify?.SetSpeakerAngle(angle);
+                SendSpotify();
+                break;
+            case "setSpatialLevel" when m.Name is "soft" or "matched" or "boost":
+                SavePrefs(_prefs with { SpatialLevel = m.Name });
+                _spotify?.SetLevel(m.Name);
+                SendSpotify();
+                break;
+            case "spotifySpatialMode" when m.Name is "stereo" or "fixed" or "tracked":
+                SetSpotifyMode(id, m.Name);
+                break;
+            case "spotifySpatialCenter" when id != 0 && _spotifySession?.Address == id && SpotifyOwnsMotion && _spotifyHasPose:
+                _headMotionTest?.RecenterAudio();
+                break;
+            case "seekMedia" when m.Id is not null && m.TrackId is not null && m.PositionMs is >= 0:
+                _nowPlaying?.Seek(m.Id, m.TrackId, m.PositionMs.Value);
+                break;
+            case "mediaCommand" when m.Id is not null && m.Name is "play" or "pause" or "previous" or "next":
+                _nowPlaying?.Control(m.Id, m.Name);
+                break;
+#endif
+            case "startSpatialMotion" when id != 0 && m.Request is > 0 and < SpotifyMotionRequest:
+                StartHeadMotion(id, false, m.Request);
+                break;
+            case "stopSpatialMotion" when id != 0 && m.Request is > 0 and < SpotifyMotionRequest:
+                StopSpatialMotion(id, m.Request);
+                break;
+            case "centerSpatialMotion" when id != 0 && m.Request is > 0 and < SpotifyMotionRequest &&
+                _headMotionTest is { } motion && motion.SpatialRequest == m.Request && motion.Session.Address == id:
+                motion.RecenterAudio();
+                break;
+            case "setGestureBinding" when m.Name is "nod" or "shake" && m.Value.ValueKind == JsonValueKind.String
+                && m.Value.GetString() is { } action && UiPrefs.IsGestureAction(action):
+                SetGestureBinding(m.Name, action);
+                break;
+            case "setGestureSensitivity" when m.Value.ValueKind == JsonValueKind.String
+                && m.Value.GetString() is { } sensitivity && UiPrefs.IsGestureSensitivity(sensitivity):
+                SetGestureSensitivity(sensitivity);
+                break;
+            case "startHeadMotion" when id != 0:
+                StartHeadMotion(id, m.Name == "playback");
+                break;
+            case "stopHeadMotion" when _headMotionTest is { SpatialRequest: 0 }:
+                StopHeadMotion();
+                break;
+            case "setOnboardEq" or "previewOnboardEq" when id != 0 && TryReadEqRequest(m.Value) is { } eq:
+                QueueOnboardEq(new OnboardEqRequest(pane, id, m.Request, eq, m.Type == "setOnboardEq"));
+                break;
+            case "watchCaseFinder":
+                _caseFinderDevice = id;
+                UpdateCaseFinderWatch();
+                break;
+            case "watchMicSetup" when m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                _micSetupRequested = m.Value.GetBoolean();
+                _micWatchRequest = m.Request;
+                UpdateMicSetupWatch();
+                break;
+            case "watchHeadphoneLevel" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                WatchHeadphoneLevel(pane, id, m.Request, m.Value.GetBoolean());
+                break;
+            case "recordMicCheck":
+                RecordMicCheck(pane, m.Id, m.Name, m.Request);
+                break;
+            case "useAirPodsForCalls" when m.Id is not null:
+                UseAirPodsForCalls(m.Id);
+                break;
+            case "openMicrophonePrivacy":
+                Launch("ms-settings:privacy-microphone");
+                break;
+            case "finishMicCheck":
+                if (_micSetupWatch is { Check: not null } recordingWatch && recordingWatch.CheckRequest == m.Request)
+                    recordingWatch.FinishSample = true;
+                break;
+            case "cancelMicCheck":
+                if (_micSetupWatch is { } cancellingWatch && cancellingWatch.CheckRequest == m.Request)
+                    cancellingWatch.StopCheck("idle");
+                break;
+            case "startListenMonitor" when m.Id is not null && m.Value.ValueKind == JsonValueKind.Number &&
+                m.Value.TryGetInt32(out int monitorLevel):
+                SetListenMonitor(m.Id, monitorLevel);
+                break;
+            case "setListenVolume" when m.Id is not null && m.Value.ValueKind == JsonValueKind.Number &&
+                m.Value.TryGetInt32(out int listenLevel) && _micSetupWatch is not null && _connections.Session is { } listeningSession:
+                _mixer.SetMonitorVolume(listeningSession.Address, m.Id, listenLevel);
+                break;
+            case "stopListenMonitor":
+                SetListenMonitor(null, 0);
+                break;
+            case "openTransparencyGuide":
+                Launch("https://support.apple.com/guide/airpods/dev966f5f818/web");
+                break;
+            case "openSoundSettings":
+                Launch("ms-settings:sound");
+                break;
             case "ready":
                 if (_mainShown)
                 {
@@ -65,7 +240,14 @@ internal sealed partial class TrayApp
                 Disconnect(id, reconnect: true);
                 break;
             case "setListeningMode" when MessageWriter.TryParse(m.Mode, out ListeningMode mode):
-                RunCommand((s, ct) => s.SetListeningModeAsync(mode, ct), Dirty.ListeningMode);
+                if (m.Request > 0 && id != 0)
+                {
+                    SetPageListeningMode(pane, id, m.Request, mode);
+                }
+                else
+                {
+                    RunCommand((s, ct) => s.SetListeningModeAsync(mode, ct), Dirty.ListeningMode);
+                }
                 break;
             case "setToggle" when m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
                 Toggle(m.Name, m.Value.GetBoolean());
@@ -92,6 +274,13 @@ internal sealed partial class TrayApp
             case "setMicSide" when MessageWriter.TryParse(m.Side, out MicSide side):
                 RunCommand((s, ct) => s.SetMicSideAsync(side, ct), Dirty.Settings);
                 break;
+            case "setOptimizedCharging" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                RunCommand((s, ct) => s.Address == id ? s.SetOptimizedChargingAsync(m.Value.GetBoolean(), ct) : ValueTask.FromResult(false), Dirty.Settings);
+                break;
+            case "setCallMutePresses" when id != 0 && m.Value.ValueKind == JsonValueKind.Number &&
+                m.Value.TryGetByte(out byte presses) && presses is 1 or 2:
+                RunCommand((s, ct) => s.Address == id ? s.SetCallMutePressesAsync(presses, ct) : ValueTask.FromResult(false), Dirty.Settings);
+                break;
             case "setPressSpeed" when m.Value.ValueKind == JsonValueKind.String && MessageWriter.TryParse(m.Value.GetString(), out PressSpeed speed):
                 RunCommand((s, ct) => s.SetPressSpeedAsync(speed, ct), Dirty.Settings);
                 break;
@@ -105,6 +294,10 @@ internal sealed partial class TrayApp
                 RunCommand((s, ct) => s.SetToneVolumeAsync(volume, ct), Dirty.Settings);
                 break;
             }
+            case "setAdaptiveStrength" when id != 0 && m.Request > 0
+                && m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetByte(out byte strength) && strength <= 100:
+                QueueAdaptiveStrength(new(pane, id, strength, m.Request));
+                break;
             case "setHostSetting" when id != 0:
                 SetHostSetting(id, m.Name, m.Value);
                 break;
@@ -162,6 +355,37 @@ internal sealed partial class TrayApp
                 SendMixer();
                 break;
             }
+            case "setNearbyAutoConnect" when AppIdentity.IsPairside && id != 0 &&
+                m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False && _devices.Exists(d => d.Address == id):
+            {
+                var enabled = _prefs.AutoConnectDevices.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (m.Value.GetBoolean()) enabled.Add(Mac.Format(id));
+                else enabled.Remove(Mac.Format(id));
+                SavePrefs(_prefs with { AutoConnectDevices = enabled.ToArray() });
+                SendLayoutPrefs();
+                break;
+            }
+            case "setSidebarOrder" when AppIdentity.IsPairside && m.Ids is { Length: 5 } pages &&
+                pages.Distinct().Count() == pages.Length && pages.All(p => p is "audioMotion" or "spatialAudio" or "pulse" or "controls" or "micSetup"):
+                SavePrefs(_prefs with { SidebarOrder = pages });
+                SendLayoutPrefs();
+                break;
+            case "setPopupSeparateBatteries" when AppIdentity.IsPairside && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                SavePrefs(_prefs with { PopupSeparateBatteries = m.Value.GetBoolean() });
+                SendLayoutPrefs();
+                SendPrefsToPopup();
+                break;
+            case "restoreWindowSize" when AppIdentity.IsPairside:
+                RestoreWindowSize();
+                break;
+            case "setReduceMotion" when AppIdentity.IsPairside && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                bool reduceMotion = m.Value.GetBoolean();
+                SavePrefs(_prefs with { ReduceMotion = reduceMotion });
+                _main?.Pane.SetReducedMotion(reduceMotion);
+                _popup?.Pane.SetReducedMotion(reduceMotion);
+                _osd?.Pane.SetReducedMotion(reduceMotion);
+                SendLayoutPrefs();
+                break;
             case "setTheme" when m.Theme is "light" or "dark" or "auto":
                 SavePrefs(_prefs with { Theme = m.Theme });
                 ApplyTheme();
@@ -186,13 +410,13 @@ internal sealed partial class TrayApp
             case "retryBluetooth":
                 _service.Retry();
                 break;
-            case "setAutoUpdate" when m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+            case "setAutoUpdate" when !AppIdentity.IsPairside && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
                 _service.SetAutoUpdate(m.Value.GetBoolean());
                 break;
-            case "checkUpdate":
+            case "checkUpdate" when !AppIdentity.IsPairside:
                 _service.CheckUpdate();
                 break;
-            case "updateNow":
+            case "updateNow" when !AppIdentity.IsPairside:
                 _service.UpdateNow();
                 break;
             case "dismissUpdate" when _service.Update.Available is { Length: > 0 } available:
@@ -224,6 +448,22 @@ internal sealed partial class TrayApp
             case "close":
                 HideMain();
                 break;
+            case "openFullWindow" when _mainCompact:
+                ShowMain();
+                break;
+            case "openCompactWindow" when AppIdentity.IsPairside && _mainShown && !_mainCompact:
+                ShowMain(compact: true);
+                break;
+            case "fitCompactHeight" when _mainShown && _mainCompact && m.Height > 0:
+            {
+                _compactHeightDip = Math.Clamp(m.Height + 2 * MainWindow.ResizeStripDip, 88, 640);
+                Rectangle bounds = CompactBounds();
+                if (bounds != main.Bounds)
+                {
+                    main.Bounds = bounds;
+                }
+                break;
+            }
             case "beginDrag":
                 main.BeginDrag();
                 break;
@@ -245,13 +485,13 @@ internal sealed partial class TrayApp
             case "ready":
                 SendPopupInit();
                 break;
-            case "popupConnect" when Mac.TryParse(m.Id, out ulong address):
+            case "popupConnect" when _popupShown && Mac.TryParse(m.Id, out ulong address):
                 _ = _nearby.ConnectAsync(address);
                 break;
-            case "popupCancel":
+            case "popupCancel" when _popupShown:
                 _nearby.CancelConnect();
                 break;
-            case "popupDismiss" when m.Ids is not null:
+            case "popupDismiss" when _popupShown && m.Ids is not null:
                 foreach (string id in m.Ids)
                 {
                     if (Mac.TryParse(id, out ulong address))
@@ -303,10 +543,18 @@ internal sealed partial class TrayApp
 
     private async void Connect(ulong address)
     {
+        if (await ConnectCoreAsync(address) is { } failure)
+        {
+            SendToast(failure, address);
+        }
+    }
+
+    private async Task<string?> ConnectCoreAsync(ulong address)
+    {
         if (!_connecting.Add(address))
         {
             Log.Info("ui", $"connect {Mac.Format(address)}: already connecting");
-            return;
+            return null;
         }
         _cancelled.Remove(address);
         SendDevices();
@@ -329,6 +577,8 @@ internal sealed partial class TrayApp
                     Log.Info("ui", $"connect {Mac.Format(address)}: the disconnect did not end within 8 s; connecting anyway");
                 }
             }
+            // Cancel can arrive while the preceding disconnect is still finishing.
+            if (_cancelled.Remove(address)) return null;
             if (_offerByAddress.TryGetValue(address, out NearbyOffer? offer) && offer.State is OfferState.Offer or OfferState.Failed)
             {
                 Log.Info("ui", $"connect {Mac.Format(address)}: through the nearby offer ({offer.State})");
@@ -352,11 +602,7 @@ internal sealed partial class TrayApp
         bool cancelled = _cancelled.Remove(address);
         Log.Info("ui", $"connect {Mac.Format(address)}: done, failure={failure ?? "none"}, cancelled={cancelled}, session={(_connections.Session is { } s ? Mac.Format(s.Address) : "none")}");
         LogConn();
-        if (cancelled || failure is null)
-        {
-            return;
-        }
-        SendToast(failure, address);
+        return cancelled ? null : failure;
     }
 
     /// <summary>
@@ -389,7 +635,7 @@ internal sealed partial class TrayApp
                 Log.Info("ui", $"connect {Mac.Format(address)}: link already up");
             }
             // Off the UI thread: the attach waits up to 10 s for the service's answer.
-            if (_connections.Session?.Address == address || await Task.Run(() => _connections.ConnectAsync(address)))
+            if (_connections.Session?.Address == address || await Task.Run(() => _connections.ConnectAsync(address, () => !cancel.IsCancellationRequested)))
             {
                 Log.Info("ui", $"connect {Mac.Format(address)}: attached");
                 return true;
@@ -431,7 +677,7 @@ internal sealed partial class TrayApp
         }
         else
         {
-            _nearby.CancelConnect();
+            _nearby.CancelConnect(address);
         }
     }
 
@@ -439,21 +685,25 @@ internal sealed partial class TrayApp
     // again: toast and resend the real devices and state.
     private async void Disconnect(ulong address, bool reconnect)
     {
-        if (_connections.Session?.Address == address)
+        if (!await DisconnectCoreAsync(address))
         {
-            await _mic.StopStreamAsync();
-            bool ok = await _connections.DisconnectAsync();
-            Log.Info("ui", $"disconnect {Mac.Format(address)}: {ok}, reconnect={reconnect}");
-            if (!ok)
-            {
-                SendToast("disconnectFailed", address);
-                SendRealState();
-            }
+            SendToast("disconnectFailed", address);
         }
         if (reconnect)
         {
             Connect(address);
         }
+    }
+
+    private async Task<bool> DisconnectCoreAsync(ulong address)
+    {
+        if (_connections.Session?.Address != address) return true;
+        await _mic.StopStreamAsync();
+        if (_connections.Session?.Address != address) return true;
+        bool ok = await _connections.DisconnectAsync(address);
+        Log.Info("ui", $"disconnect {Mac.Format(address)}: {ok}");
+        if (!ok) SendRealState();
+        return ok;
     }
 
     private KnownDevice? Find(ulong address) => _connections.GetDevices().Find(d => d.Address == address);
@@ -537,21 +787,182 @@ internal sealed partial class TrayApp
         {
             SendStateDeltas(field, current.State, force: true);
         }
-        if (toast)
+        if (toast && session is not null && _connections.Session == session)
         {
-            SendToast("noResponse", session?.Address ?? 0);
+            SendToast("noResponse", session.Address);
         }
         return false;
+    }
+
+    private sealed record PageModeRequest(WebPane Pane, AapSession? Session, ulong Address, int Request, ListeningMode Mode);
+    private PageModeRequest? _queuedPageMode;
+    private TaskCompletionSource? _pageModesFlushed;
+
+    // Dispatch the first selection immediately. During a burst keep one queued selection and give the
+    // previous write a bounded time to report, so the buds receive fewer intermediate modes.
+    private async void SetPageListeningMode(WebPane pane, ulong address, int request, ListeningMode mode)
+    {
+        _queuedPageMode = new(pane, _connections.Session, address, request, mode);
+        if (_pageModesFlushed is not null) return;
+        var flushed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pageModesFlushed = flushed;
+        try
+        {
+            while (_queuedPageMode is { } waiting)
+            {
+                if (waiting.Session is { } previous && _connections.Session == previous && previous.Address == waiting.Address)
+                    await previous.WaitForListeningModeDispatchAsync();
+                // A newer selection can replace the queued one while waiting for the previous report.
+                PageModeRequest next = _queuedPageMode!;
+                _queuedPageMode = null;
+                bool written = false;
+                if (next.Pane == _main?.Pane && next.Session is { } session && session.Address == next.Address
+                    && _connections.Session == session && session.State.Status == SessionStatus.Ready)
+                {
+                    using var timeout = new CancellationTokenSource(CommandTimeout);
+                    try { written = await session.SetListeningModeAsync(next.Mode, timeout.Token); }
+                    catch (Exception e) when (e is OperationCanceledException or InvalidOperationException)
+                    {
+                        Log.Warn("ui", $"listening mode write failed: {e.Message}");
+                    }
+                }
+                if (_queuedPageMode is not null || _main?.Pane != next.Pane || !next.Pane.Ready) continue;
+                if (!written && next.Session is not null && _connections.Session == next.Session && next.Session.Address == next.Address
+                    && next.Session.State.ReportedListeningMode != next.Mode)
+                    SendToast("noResponse", next.Address);
+                ReplyPageListeningMode(next.Pane, next.Address, next.Request);
+            }
+        }
+        finally
+        {
+            _pageModesFlushed = null;
+            flushed.TrySetResult();
+        }
+    }
+
+    private void ReplyPageListeningMode(WebPane pane, ulong address, int request)
+    {
+        var w = _writer.Begin("listeningMode");
+        w.WriteString("id", Mac.Format(address));
+        w.WriteNumber("request", request);
+        if (_connections.ShownSession is { } current && current.Address == address)
+        {
+            MessageWriter.WriteListeningMode(w, current.State);
+        }
+        else
+        {
+            w.WriteNull("listeningMode");
+        }
+        pane.Post(_writer.End());
+    }
+
+    private sealed record AdaptiveRequest(WebPane Pane, ulong Address, byte Strength, int Request);
+    private AdaptiveRequest? _pendingAdaptive;
+    private bool _applyingAdaptive;
+
+    // One write/readback at a time. Only the newest value waiting for the connection is worth sending.
+    private async void QueueAdaptiveStrength(AdaptiveRequest request)
+    {
+        _pendingAdaptive = request;
+        if (_applyingAdaptive)
+        {
+            return;
+        }
+        _applyingAdaptive = true;
+        try
+        {
+            while (_pendingAdaptive is { } applying)
+            {
+                _pendingAdaptive = null;
+                string status = await ApplyAdaptiveStrengthAsync(applying);
+                if ((status is "confirmed" or "unconfirmed") && _pendingAdaptive is { } pending
+                    && pending.Address == applying.Address && pending.Strength == applying.Strength)
+                {
+                    applying = pending;
+                    _pendingAdaptive = null;
+                }
+                if (_pendingAdaptive?.Pane != applying.Pane)
+                {
+                    SendAdaptiveStrengthResult(applying, status);
+                }
+            }
+        }
+        finally
+        {
+            _applyingAdaptive = false;
+        }
+    }
+
+    private async Task<string> ApplyAdaptiveStrengthAsync(AdaptiveRequest request)
+    {
+        string status = "failed";
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        try
+        {
+            // The UI can expose the balance control immediately after a mode tap. Wait for that
+            // write to finish before checking the physical session's mode.
+            if (_pageModesFlushed is { } switching)
+                await switching.Task.WaitAsync(wait.Token);
+            if (_main?.Pane == request.Pane && _connections.Session is { } session && session.Address == request.Address)
+            {
+                var (sent, confirmed) = await session.SetAdaptiveStrengthAsync(request.Strength, wait.Token);
+                // Many firmwares only report the new balance on a later settings snapshot. Keep the
+                // control session alive; reattaching here interrupted gestures and unrelated writes.
+                status = confirmed ? "confirmed" : sent ? "unconfirmed" : "failed";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Warn("aap", "adaptive filtering readback timed out");
+        }
+        return status;
+    }
+
+    private void SendAdaptiveStrengthResult(AdaptiveRequest request, string status)
+    {
+        if (_main?.Pane == request.Pane && request.Pane.Ready)
+        {
+            if (_connections.ShownSession is { } current && current.Address == request.Address && MainLive)
+            {
+                SendStateDeltas(Dirty.Settings, current.State, force: true);
+            }
+            var w = _writer.Begin("adaptiveStrengthResult");
+            w.WriteString("id", Mac.Format(request.Address));
+            w.WriteNumber("request", request.Request);
+            w.WriteString("status", status);
+            request.Pane.Post(_writer.End());
+        }
     }
 
     // ---- Host settings and app prefs ----
 
     private async void SetHostSetting(ulong address, string? name, JsonElement value)
     {
+        if (name == "earResumeSeconds" && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out int seconds) && seconds is 0 or 15 or 60)
+        {
+            try { _settings.Set(address, _settings.Get(address) with { EarResumeSeconds = seconds }); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Log.Warn("earpause", $"Resume preference could not be saved: {e.Message}");
+                SendToast("resumeSaveFailed", address);
+            }
+            SendHostSettings(address);
+            return;
+        }
+        if (name == "sleepPause" && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            await SetSleepPauseAsync(address, value.GetBoolean());
+            return;
+        }
         Func<HostSettings, HostSettings>? change = name switch
         {
             "disableHandsFree" when value.ValueKind is JsonValueKind.True or JsonValueKind.False && value.GetBoolean() is var off => s => s with { DisableHandsFree = off },
             "lowLatency" when value.ValueKind is JsonValueKind.True or JsonValueKind.False && value.GetBoolean() is var on => s => s with { LowLatency = on },
+            "lowLatencyMic" when value.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                _connections.Session is { } active && active.Address == address &&
+                Models.HasStereoMic(active.State.ModelNumber ?? _settings.GetModel(address)?.Number) =>
+                    s => s with { LowLatencyMic = value.GetBoolean() },
             // The pipeline loads the new effective mode's model (HostSettingsChanged).
             "micMode" when value.ValueKind == JsonValueKind.String && MessageWriter.TryParse(value.GetString(), out MicMode mode) => s => s with { MicMode = mode },
             "duckPercent" when value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int duck) && duck is >= 10 and <= 90 => s => s with { DuckPercent = duck },
@@ -562,6 +973,113 @@ internal sealed partial class TrayApp
             await ApplyHostSettingsAsync(address, change, toast: true);
         }
         SendHostSettings(address);
+    }
+
+    private async Task SetSleepPauseAsync(ulong address, bool enabled)
+    {
+        if (_connections.Session is { } session && session.Address == address &&
+            (session.State.Capabilities & DeviceCapabilities.SleepDetection) != 0)
+        {
+            using var timeout = new CancellationTokenSource(CommandTimeout);
+            try
+            {
+                if (!enabled || await session.EnableSleepDetectionAsync(timeout.Token))
+                {
+                    if (!await ApplyHostSettingsAsync(address, s => s with { SleepPause = enabled }, toast: false))
+                        SendToast("noResponse", address);
+                }
+                else
+                {
+                    SendToast("noResponse", address);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                SendToast("noResponse", address);
+            }
+        }
+        SendHostSettings(address);
+    }
+
+    private static OnboardEq? TryReadEqRequest(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object ||
+            !value.TryGetProperty("enabled", out JsonElement enabled) || enabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            !ReadBand(value, "low", out byte low) || !ReadBand(value, "mid", out byte mid) ||
+            !ReadBand(value, "high", out byte high))
+        {
+            return null;
+        }
+        return new OnboardEq(enabled.GetBoolean(), low, mid, high);
+
+        static bool ReadBand(JsonElement src, string key, out byte band)
+        {
+            band = 0;
+            return src.TryGetProperty(key, out JsonElement item) && item.ValueKind == JsonValueKind.Number &&
+                item.TryGetByte(out band) && band <= 100;
+        }
+    }
+
+    private sealed record OnboardEqRequest(WebPane Pane, ulong Address, int Request, OnboardEq Eq, bool Commit);
+    private OnboardEqRequest? _pendingOnboardEq;
+    private bool _applyingOnboardEq;
+
+    private async void QueueOnboardEq(OnboardEqRequest request)
+    {
+        _pendingOnboardEq = request;
+        if (_applyingOnboardEq) return;
+        _applyingOnboardEq = true;
+        try
+        {
+            while (_pendingOnboardEq is { } next)
+            {
+                _pendingOnboardEq = null;
+                await ApplyOnboardEqAsync(next);
+            }
+        }
+        finally
+        {
+            _applyingOnboardEq = false;
+        }
+    }
+
+    private async Task ApplyOnboardEqAsync(OnboardEqRequest request)
+    {
+        var (pane, address, sequence, eq, commit) = request;
+        string status = "failed";
+        if (_main?.Pane == pane && _connections.Session is { } session && session.Address == address)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(commit ? 6 : 1));
+            try
+            {
+                if (!commit)
+                {
+                    await session.PreviewCustomEqAsync(eq, timeout.Token);
+                    return;
+                }
+                var (sent, confirmed) = await session.SetCustomEqAsync(eq, timeout.Token);
+                status = confirmed ? "confirmed" : sent ? "unconfirmed" : "failed";
+                if (sent && !confirmed && _pendingOnboardEq is null && _headMotionTest is null && await _connections.ReadBackCustomEqAsync(session,
+                        () => _mic.Status == MicStatus.NotActive && !_mic.HandsFreeInUse, timeout.Token) is { } reported)
+                {
+                    status = reported == eq ? "confirmed" : "different";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (commit) Log.Info("aap", "onboard EQ readback timed out");
+            }
+        }
+        if (!commit || _pendingOnboardEq is not null) return;
+        Log.Info("aap", $"onboard EQ result: {status}");
+        if (_main?.Pane != pane || !pane.Ready) return;
+        if (MainLive && _connections.ShownSession is { } current && current.Address == address)
+            SendStateDeltas(Dirty.Settings, current.State, force: true);
+        var w = _writer.Begin("onboardEqResult");
+        w.WriteString("id", Mac.Format(address));
+        w.WriteNumber("request", sequence);
+        w.WriteString("status", status);
+        pane.Post(_writer.End());
     }
 
     /// <summary>
@@ -736,7 +1254,7 @@ internal sealed partial class TrayApp
 
     private void WriteUpdate(Utf8JsonWriter w)
     {
-        UpdateInfo u = _service.Update;
+        UpdateInfo u = AppIdentity.IsPairside ? UpdateInfo.Unknown with { Auto = false } : _service.Update;
         Version app = typeof(TrayApp).Assembly.GetName().Version ?? new Version(0, 0, 0);
         w.WriteStartObject("update");
         w.WriteString("version", u.Installed.Length > 0 ? u.Installed : app.ToString(3));
@@ -744,6 +1262,7 @@ internal sealed partial class TrayApp
         w.WriteString("status", MessageWriter.Camel(u.Status));
         w.WriteBoolean("checked", u.Checked);
         w.WriteBoolean("auto", u.Auto);
+        w.WriteBoolean("managedExternally", AppIdentity.IsPairside);
         w.WriteString("dismissed", _prefs.DismissedUpdate);
         w.WriteEndObject();
     }

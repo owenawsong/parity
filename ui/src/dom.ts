@@ -50,6 +50,15 @@ export const setDisabled = (
   }
 };
 
+export const readCssTimeMs = (el: HTMLElement, property: string, fallback: number): number => {
+  const value = getComputedStyle(el).getPropertyValue(property).trim();
+  const time = Number.parseFloat(value);
+  if (!Number.isFinite(time) || time < 0) return fallback;
+  if (value.endsWith('ms')) return time;
+  if (value.endsWith('s')) return time * 1000;
+  return fallback;
+};
+
 export const createAnnouncer = (el: Element): ((text: string) => void) => {
   let frame = 0;
 

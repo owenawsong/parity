@@ -13,9 +13,9 @@ internal sealed partial class TrayApp
 
     // Match tokens.css bg-window / surface-flyout, so the window never flashes another colour before the page paints.
     private static readonly Color MainLight = Color.FromArgb(0xF2, 0xF2, 0xF4);
-    private static readonly Color MainDark = Color.FromArgb(0x1C, 0x1C, 0x1F);
+    private static readonly Color MainDark = Color.FromArgb(0x09, 0x0A, 0x0B);
     private static readonly Color PopupLight = Color.FromArgb(0xFB, 0xFB, 0xFC);
-    private static readonly Color PopupDark = Color.FromArgb(0x2C, 0x2C, 0x30);
+    private static readonly Color PopupDark = Color.FromArgb(0x19, 0x1A, 0x1C);
 
     private readonly Icon _appIcon;
     private readonly System.Windows.Forms.Timer _hideTimer = new();
@@ -46,18 +46,51 @@ internal sealed partial class TrayApp
 
     // ---- Main window ----
 
-    private void ShowMain()
+    private bool _mainCompact;
+    private Point _compactAnchor;
+    private double _compactHeightDip = 345;
+
+    private void ShowMain(bool compact = false)
     {
         if (_exiting)
         {
             return;
         }
         _hideTimer.Stop();
+        compact = compact && AppIdentity.IsPairside && _prefs.FirstRunDone &&
+            !_adapterUnsupported && !_restartPending && _devices.Count != 0;
+        if (compact)
+        {
+            _compactAnchor = Cursor.Position;
+        }
         if (_main is not { } window)
         {
             Log.Info("ui", "main window: create");
+            _mainCompact = compact;
             CreateMain();
             return;
+        }
+        if (window.WindowState == FormWindowState.Minimized)
+        {
+            window.WindowState = FormWindowState.Normal;
+        }
+        if (compact != _mainCompact)
+        {
+            if (!_mainCompact)
+            {
+                _mainPosition = window.Location;
+            }
+            _mainCompact = compact;
+            window.SetCompact(compact);
+            window.Bounds = compact ? CompactBounds() : MainBounds();
+            if (_mainShown && _mainInitSent)
+            {
+                SendMainPresentation(window.Pane);
+            }
+        }
+        else if (compact && !_mainShown)
+        {
+            window.Bounds = CompactBounds();
         }
         if (!_mainShown)
         {
@@ -69,6 +102,8 @@ internal sealed partial class TrayApp
             window.Pane.SetVisible(true);
             _mainShown = true;
             window.Show();
+            UpdateMicSetupWatch();
+            UpdateCaseFinderWatch();
             if (window.Pane.Ready)
             {
                 if (_mainInitSent)
@@ -81,19 +116,24 @@ internal sealed partial class TrayApp
                 }
             }
         }
-        if (window.WindowState == FormWindowState.Minimized)
-        {
-            window.WindowState = FormWindowState.Normal;
-        }
         window.Activate();
+        UpdateNowPlayingWatch();
     }
 
     private async void CreateMain()
     {
-        var pane = new WebPane(OnMainMessage, OnPaneFailed);
-        var window = new MainWindow(MainBounds(), MainBackground, Dark, Text("app.name"), _appIcon, pane);
+        var pane = new WebPane(OnMainMessage, OnPaneFailed, _prefs.ReduceMotion);
+        var window = new MainWindow(_mainCompact ? CompactBounds() : MainBounds(), MainBackground, Dark,
+            Text("app.name"), _appIcon, pane, _mainCompact);
         window.CloseRequested += HideMain;
-        window.HeightChanged += OnMainHeightChanged;
+        window.Resized += OnMainResized;
+        window.Resize += (_, _) =>
+        {
+            UpdateMicSetupWatch();
+            if (window.WindowState == FormWindowState.Minimized) StopHeadphoneLevel();
+            UpdateCaseFinderWatch();
+            UpdateNowPlayingWatch();
+        };
         _main = window;
         _mainShown = true;
         window.Show();
@@ -125,7 +165,7 @@ internal sealed partial class TrayApp
         {
             return;
         }
-        if (window.WindowState == FormWindowState.Normal)
+        if (!_mainCompact && window.WindowState == FormWindowState.Normal)
         {
             _mainPosition = window.Location;
         }
@@ -133,7 +173,12 @@ internal sealed partial class TrayApp
         // A hotkey being recorded on the page ends with it.
         _hotkeys.Pause(false);
         PostVisibility(window.Pane, false);
+        StopHeadphoneLevel();
         _mainShown = false;
+        UpdateNowPlayingWatch();
+        StopWindowMotion();
+        UpdateMicSetupWatch();
+        UpdateCaseFinderWatch();
         window.Hide();
         window.Pane.SetVisible(false);
         _suspendPending = true;
@@ -167,25 +212,43 @@ internal sealed partial class TrayApp
         {
             return;
         }
-        if (window.WindowState == FormWindowState.Normal)
+        if (!_mainCompact && window.WindowState == FormWindowState.Normal)
         {
             _mainPosition = window.Location;
         }
         Log.Info("ui", "main window: destroy");
         _hotkeys.Pause(false);
+        StopHeadphoneLevel();
         _main = null;
         _mainShown = false;
+        UpdateNowPlayingWatch();
+        StopWindowMotion();
         _mainInitSent = false;
+        _micSetupRequested = false;
+        _caseFinderDevice = 0;
+#if PAIRSIDE_LIVE
+        _pulseWatch = 0;
+        _batteryWatch = 0;
+        _pulseRevision++;
+#endif
+        UpdateMicSetupWatch();
+        UpdateCaseFinderWatch();
         _hideTimer.Stop();
         window.Destroy();
     }
 
-    private void OnMainHeightChanged(double heightDip)
+    private void OnMainResized(double widthDip, double heightDip)
     {
-        double height = Math.Round(Math.Clamp(heightDip, MainWindow.MinHeightDip, MainWindow.MaxHeightDip));
-        if (height != _prefs.WindowHeight)
+        if (_mainCompact)
         {
-            SavePrefs(_prefs with { WindowHeight = height });
+            return;
+        }
+        double height = Math.Round(Math.Clamp(heightDip, MainWindow.MinHeightDip, MainWindow.MaxHeightDip));
+        double width = AppIdentity.IsPairside
+            ? Math.Round(Math.Clamp(widthDip, MainWindow.MinWidthDip, MainWindow.MaxWidthDip)) : _prefs.WindowWidth;
+        if (height != _prefs.WindowHeight || width != _prefs.WindowWidth)
+        {
+            SavePrefs(_prefs with { WindowHeight = height, WindowWidth = width });
         }
     }
 
@@ -223,13 +286,26 @@ internal sealed partial class TrayApp
         }, (this, pane));
     }
 
+    private Rectangle CompactBounds()
+    {
+        (Rectangle area, uint dpi) = NativeUi.MonitorAt(_compactAnchor);
+        float scale = dpi / 96f;
+        int margin = (int)MathF.Round(12 * scale);
+        int width = Math.Min(area.Width, (int)MathF.Round(352 * scale));
+        int height = Math.Min(area.Height, (int)Math.Round(_compactHeightDip * scale));
+        int left = Math.Max(area.Left, area.Right - width - margin);
+        int top = Math.Max(area.Top, area.Bottom - height - margin);
+        return new Rectangle(left, top, width, height);
+    }
+
     /// <summary>Last position, else centred on the primary work area; scaled to that monitor's DPI.</summary>
     private Rectangle MainBounds()
     {
         (Rectangle area, uint dpi) = _mainPosition is { } position ? NativeUi.MonitorAt(position) : NativeUi.PrimaryMonitor();
         float scale = dpi / 96f;
-        int width = (int)MathF.Round(MainWindow.WidthDip * scale);
-        int height = (int)Math.Round(Math.Clamp(_prefs.WindowHeight, MainWindow.MinHeightDip, MainWindow.MaxHeightDip) * scale);
+        double widthDip = AppIdentity.IsPairside ? Math.Clamp(_prefs.WindowWidth, MainWindow.MinWidthDip, MainWindow.MaxWidthDip) : MainWindow.WidthDip;
+        int width = Math.Min(area.Width, (int)Math.Round(widthDip * scale));
+        int height = Math.Min(area.Height, (int)Math.Round(Math.Clamp(_prefs.WindowHeight, MainWindow.MinHeightDip, MainWindow.MaxHeightDip) * scale));
         Point location = _mainPosition ?? new Point(area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2);
         return ClampToWorkArea(new Rectangle(location, new Size(width, height)));
     }
@@ -244,6 +320,7 @@ internal sealed partial class TrayApp
 
     private void SendMainInit()
     {
+        SendMainPresentation(_main!.Pane);
         Array.Clear(_lastSent);
         Utf8JsonWriter w = _writer.Begin("init");
         MessageWriter.WriteLocale(w, _locale);
@@ -261,6 +338,7 @@ internal sealed partial class TrayApp
         w.WriteString("windowsLanguageName", NativeUi.NativeDisplayName(NativeUi.UserUiLanguage()));
         WritePrefs(w);
         w.WriteBoolean("startup", StartupRegistration.IsEnabled());
+        WriteGestureBindings(w);
         w.WriteBoolean("firstRun", !_prefs.FirstRunDone);
         w.WriteBoolean("adapterUnsupported", _adapterUnsupported);
         w.WriteBoolean("restartPending", _restartPending);
@@ -283,6 +361,12 @@ internal sealed partial class TrayApp
         w.WriteBoolean("visible", _mainShown);
         PostMain(_writer.End());
         _mainInitSent = true;
+        UpdateNowPlayingWatch(replay: true);
+        SendActivity();
+        ReplayPlaybackGestures();
+#if PAIRSIDE_LIVE
+        SendSpotify();
+#endif
         if (_settingsResetPending)
         {
             _settingsResetPending = false;
@@ -293,9 +377,16 @@ internal sealed partial class TrayApp
     // Re-show of an initialized page: resends what may have changed while hidden, since hidden sends are dropped.
     private void SendMainRefresh(WebPane pane)
     {
+        SendMainPresentation(pane);
         Array.Clear(_lastSent);
         PostVisibility(pane, true);
+        SendActivity();
+#if PAIRSIDE_LIVE
+        SendBatteryHistory();
+        SendSpotify();
+#endif
         SendMainDeltas(Dirty.Devices | Dirty.Session | Dirty.Mic | Dirty.Mixer, _session?.State);
+        ReplayPlaybackGestures();
         SendStartupPref();
         SendUpdate();
         SendAdapter();
@@ -316,6 +407,17 @@ internal sealed partial class TrayApp
         }
     }
 
+    private void SendMainPresentation(WebPane pane)
+    {
+        if (!AppIdentity.IsPairside)
+        {
+            return;
+        }
+        Utf8JsonWriter w = _writer.Begin("presentation");
+        w.WriteString("mode", _mainCompact ? "tray" : "full");
+        pane.Post(_writer.End());
+    }
+
     private ulong? Selected()
     {
         if (_session is { } session)
@@ -334,7 +436,36 @@ internal sealed partial class TrayApp
     {
         w.WriteString("theme", _prefs.Theme);
         w.WriteBoolean("useAccent", _prefs.UseAccent);
+        WriteLayoutPrefs(w);
         MessageWriter.WriteAccent(w, _accent);
+    }
+
+    private void WriteLayoutPrefs(Utf8JsonWriter w)
+    {
+        w.WriteBoolean("reduceMotion", _prefs.ReduceMotion);
+        w.WriteBoolean("popupSeparateBatteries", _prefs.PopupSeparateBatteries);
+        w.WriteStartArray("sidebarOrder");
+        foreach (string page in _prefs.SidebarOrder) w.WriteStringValue(page);
+        w.WriteEndArray();
+        w.WriteStartArray("autoConnectDevices");
+        foreach (string id in _prefs.AutoConnectDevices) w.WriteStringValue(id);
+        w.WriteEndArray();
+    }
+
+    private void SendLayoutPrefs()
+    {
+        var w = _writer.Begin("prefs");
+        WriteLayoutPrefs(w);
+        PostMain(_writer.End());
+    }
+
+    private void RestoreWindowSize()
+    {
+        if (_mainCompact || _main is not { } main) return;
+        if (main.WindowState != FormWindowState.Normal) main.WindowState = FormWindowState.Normal;
+        _mainPosition = main.Bounds.Location;
+        SavePrefs(_prefs with { WindowWidth = UiPrefs.Default.WindowWidth, WindowHeight = UiPrefs.Default.WindowHeight });
+        main.Bounds = MainBounds();
     }
 
     private void PostVisibility(WebPane pane, bool visible)
@@ -394,7 +525,7 @@ internal sealed partial class TrayApp
     }
 
     // Hides the popup but keeps its page, so the next case open skips the WebView2 cold start.
-    // The empty offers make the page hide its card and report height 0.
+    // The page keeps its last card through the window's exit.
     private void ParkPopup()
     {
         if (_popup is not { } window || _popupParked)
@@ -402,10 +533,16 @@ internal sealed partial class TrayApp
             return;
         }
         Log.Info("ui", "popup: park");
-        HidePopup();
-        window.Pane.Post(OffersMessage());
         _popupParked = true;
         _popupSuspendPending = true;
+        if (_popupShown)
+        {
+            HidePopup();
+        }
+        else if (!window.Visible)
+        {
+            window.Pane.Post(OffersMessage());
+        }
         _popupTimer.Interval = (int)SuspendAfter.TotalMilliseconds;
         _popupTimer.Start();
     }
@@ -433,10 +570,17 @@ internal sealed partial class TrayApp
     private async void CreatePopup()
     {
         Log.Info("ui", $"popup: create ({_offers.Count} offers)");
-        var pane = new WebPane(OnPopupMessage, OnPaneFailed);
+        var pane = new WebPane(OnPopupMessage, OnPaneFailed, _prefs.ReduceMotion);
         var window = new PopupWindow(PopupBackground, Dark, pane);
         window.ScaleChanged += PlacePopup;
         window.CloseRequested += HidePopup;
+        window.Dismissed += () =>
+        {
+            if (_popup == window && _popupParked && _offers.Count == 0)
+            {
+                pane.Post(OffersMessage());
+            }
+        };
         _popup = window;
         _popupShown = false;
         _popupHeight = 0;
@@ -475,22 +619,28 @@ internal sealed partial class TrayApp
 
     private void OnPopupSize(double heightDip)
     {
-        _popupHeight = heightDip;
         if (_popup is not { } window)
         {
             return;
         }
-        if (heightDip <= 0 || _offers.Count == 0)
+        if (_offers.Count == 0)
         {
+            _popupHeight = heightDip;
             HidePopup();
             return;
         }
+        // A parked page can report its old, empty layout while a new offer is loading.
+        if (heightDip <= 0)
+        {
+            return;
+        }
+        _popupHeight = heightDip;
         PlacePopup();
         if (!_popupShown)
         {
             Log.Info("ui", "popup: show");
             _popupShown = true;
-            window.Show();
+            window.Present();
             PostVisibility(window.Pane, true);
             _host.SetHotKey(true);
         }
@@ -508,7 +658,8 @@ internal sealed partial class TrayApp
         int width = (int)MathF.Round(PopupWindow.WidthDip * scale);
         int height = (int)Math.Ceiling(_popupHeight * scale);
         int margin = (int)MathF.Round(PopupWindow.MarginDip * scale);
-        NativeUi.SetBounds(window.Handle, new Rectangle(area.Right - margin - width, area.Bottom - margin - height, width, height));
+        int travel = (int)MathF.Round(14 * scale);
+        window.Place(new Rectangle(area.Right - margin - width, area.Bottom - margin - height, width, height), travel);
     }
 
     private void HidePopup()
@@ -521,7 +672,7 @@ internal sealed partial class TrayApp
         _popupShown = false;
         _host.SetHotKey(false);
         PostVisibility(window.Pane, false);
-        window.Hide();
+        window.Dismiss();
     }
 
     private void DestroyPopup()
@@ -594,6 +745,7 @@ internal sealed partial class TrayApp
         Utf8JsonWriter w = _writer.Begin("prefs");
         w.WriteString("theme", _prefs.Theme);
         w.WriteBoolean("useAccent", _prefs.UseAccent);
+        w.WriteBoolean("popupSeparateBatteries", _prefs.PopupSeparateBatteries);
         string json = _writer.End();
         _popup?.Pane.Post(json);
         _osd?.Pane.Post(json);

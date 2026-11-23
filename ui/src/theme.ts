@@ -15,7 +15,7 @@ const ACCENT_VARS = [
 ];
 const WEIGHTS = [0.2126, 0.7152, 0.0722];
 
-let themePref: Theme = 'auto';
+let themePref: Theme = 'dark';
 let useAccent = false;
 let ramp: AccentRamp | null = null;
 let tokens: Record<'light' | 'dark', ThemeTokens> | null = null;

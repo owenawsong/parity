@@ -1,0 +1,62 @@
+/* The artwork, identity and actions share their resting layout while a film
+   plays. Keep the case on its own axis through the turn and the lift. */
+.wp-hero__visual--pro3 > :is(video.wp-connect-wait[loop], .wp-connect-turn) { translate: -50% -46.2%; }
+.wp-hero__visual--revealing:has(.wp-connect-motion:not([hidden])) > .wp-hero__art--poster {
+  visibility: hidden;
+}
+html:not([data-presentation='tray']) .wp-device-home {
+  --overview-art-height: clamp(158px, 34dvh, 208px);
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero:not(.wp-hero--offline) {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+}
+html:not([data-presentation='tray']) .wp-device-home:has(.wp-hero__visual--film):not(:has(.wp-hero--controls)) {
+  flex: 0 0 auto;
+  width: min(100%, 680px);
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero:has(> .wp-hero__visual--film) {
+  flex: 0 0 auto;
+  grid-template-rows: auto auto;
+  gap: 0 12px;
+  padding: 5px 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero:has(> .wp-hero__visual--film) .wp-devswitch {
+  font-size: clamp(23px, 4vw, 30px);
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero__visual--film {
+  --hero-stage-size: var(--overview-art-height);
+  height: var(--hero-stage-size);
+  min-height: var(--hero-stage-size);
+  padding: 0;
+  border: 0;
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero__visual--settled:not(.wp-hero__visual--film) {
+  min-block-size: var(--overview-art-height);
+}
+html:not([data-presentation='tray']) .wp-hero__visual--pro3.wp-hero__visual--film > .wp-connect-wait {
+  width: min(91cqw, 112cqh, 354px);
+}
+html:not([data-presentation='tray']) .wp-hero__visual--pro3.wp-hero__visual--film > .wp-connect-motion {
+  width: min(74.84cqw, 92.11cqh, 291.13px);
+}
+html[data-presentation='tray'] .wp-device-home .wp-hero:has(> .wp-hero__visual--film),
+html[data-presentation='tray'] .wp-device-home .wp-hero__visual--film {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.wp-hero--discovery .wp-hero__actions, .wp-hero--discovery .wp-status {
+  transition: opacity 135ms ease-out;
+}
+.wp-hero--discovery.wp-hero--lift-playing .wp-hero__actions,
+.wp-hero--discovery.wp-hero--lift-playing .wp-status { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .wp-hero--discovery .wp-hero__actions, .wp-hero--discovery .wp-status { transition: none; }
+}

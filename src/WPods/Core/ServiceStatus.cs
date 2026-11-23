@@ -71,6 +71,12 @@ internal sealed class ServiceStatus : IDisposable
     /// <summary>Service reason code for the state, e.g. "not-usb", "none", "usbip-missing" when Unsupported.</summary>
     public string Detail { get; private set; } = "";
 
+    internal (ServiceState? State, string Detail, string Version) Snapshot()
+    {
+        lock (_lock) return (_pipe != null || _state is ServiceState.Native or ServiceState.NotRunning ? _state : null,
+            Detail, Update.Installed);
+    }
+
     public void SetAutoUpdate(bool on) => Send([ServicePipes.SetAutoUpdateMessage, on ? (byte)1 : (byte)0], "auto-update");
 
     public void CheckUpdate() => Send([ServicePipes.CheckUpdateMessage], "check for updates");
@@ -141,7 +147,7 @@ internal sealed class ServiceStatus : IDisposable
             _pipe = pipe;
         }
         // Once per app run: lets the service install an already downloaded update.
-        if (!_announced)
+        if (!AppIdentity.IsPairside && !_announced)
         {
             _announced = true;
             Send([ServicePipes.AppStartedMessage], "app started");

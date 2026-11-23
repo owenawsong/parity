@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Nearby/NearbyReconnect.cs" Link="NearbyReconnect.cs" />
+    <Compile Include="../../../src/WPods/Nearby/CaseSignalTrend.cs" Link="CaseSignalTrend.cs" />
+  </ItemGroup>
+</Project>

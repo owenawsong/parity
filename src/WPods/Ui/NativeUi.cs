@@ -19,8 +19,14 @@ internal static unsafe partial class NativeUi
 
     public const int HtClient = 1;
     public const int HtCaption = 2;
+    public const int HtLeft = 10;
+    public const int HtRight = 11;
     public const int HtTop = 12;
+    public const int HtTopLeft = 13;
+    public const int HtTopRight = 14;
     public const int HtBottom = 15;
+    public const int HtBottomLeft = 16;
+    public const int HtBottomRight = 17;
     public const int MaNoActivate = 3;
 
     public const int WsPopup = unchecked((int)0x80000000);
@@ -145,6 +151,15 @@ internal static unsafe partial class NativeUi
 
     public static void SetBounds(nint hwnd, Rectangle bounds) =>
         SetWindowPos(hwnd, 0, bounds.X, bounds.Y, bounds.Width, bounds.Height, SwpNoZOrder | SwpNoActivate);
+
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetSystemParameter(uint action, uint parameter, out int value, uint flags);
+
+    private const uint SpiGetClientAreaAnimation = 0x1042;
+
+    public static bool ClientAnimationsEnabled() =>
+        !GetSystemParameter(SpiGetClientAreaAnimation, 0, out int enabled, 0) || enabled != 0;
 
     public static void SetWindowInt(nint hwnd, int attribute, int value) => DwmSetWindowAttribute(hwnd, attribute, value, sizeof(int));
 

@@ -1,23 +1,28 @@
+using WPods.Core;
+
 namespace WPods.Ui;
 
 /// <summary>
 /// The main window: no title bar or frame (the page draws its own), Windows 11 round corners and shadow by DWM,
-/// 400 DIPs wide, 480 to 960 DIPs tall, resizable vertically only from a thin strip at the top and bottom edge
-/// (the page covers everything else, so the strips are the only area that sees WM_NCHITTEST).
+/// Resize strips surround the web pane. WPods keeps its fixed width while Pairside can resize on both axes.
 /// </summary>
 internal sealed class MainWindow : Form
 {
     public const int WidthDip = 400;
+    public const int MinWidthDip = 360;
+    public const int MaxWidthDip = 1400;
     public const int MinHeightDip = 480;
     public const int MaxHeightDip = 960;
-    private const int ResizeStripDip = 4;
+    public const int ResizeStripDip = 4;
 
     private bool _dark;
     private bool _destroying;
+    private bool _compact;
 
-    public MainWindow(Rectangle bounds, Color background, bool dark, string title, Icon icon, WebPane pane)
+    public MainWindow(Rectangle bounds, Color background, bool dark, string title, Icon icon, WebPane pane, bool compact)
     {
         Pane = pane;
+        _compact = compact;
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
@@ -31,11 +36,13 @@ internal sealed class MainWindow : Form
 
     public WebPane Pane { get; }
 
+    public void SetCompact(bool compact) => _compact = compact;
+
     /// <summary>Close button, Alt+F4, the taskbar's Close or an outside WM_CLOSE: the app hides the window instead.</summary>
     public event Action? CloseRequested;
 
-    /// <summary>The user finished resizing; new height in DIPs.</summary>
-    public event Action<double>? HeightChanged;
+    /// <summary>The user finished resizing; dimensions in DIPs.</summary>
+    public event Action<double, double>? Resized;
 
     private float DpiScale => NativeUi.GetDpiForWindow(Handle) / 96f;
 
@@ -134,8 +141,27 @@ internal sealed class MainWindow : Form
                 return;
             case NativeUi.WmNcHitTest:
             {
+                if (_compact)
+                {
+                    m.Result = NativeUi.HtClient;
+                    return;
+                }
                 int y = (short)((long)m.LParam >> 16) - Top;
                 int strip = Strip();
+                if (AppIdentity.IsPairside)
+                {
+                    int x = (short)((long)m.LParam & 0xffff) - Left;
+                    if (x < strip)
+                    {
+                        m.Result = y < strip ? NativeUi.HtTopLeft : y >= Height - strip ? NativeUi.HtBottomLeft : NativeUi.HtLeft;
+                        return;
+                    }
+                    if (x >= Width - strip)
+                    {
+                        m.Result = y < strip ? NativeUi.HtTopRight : y >= Height - strip ? NativeUi.HtBottomRight : NativeUi.HtRight;
+                        return;
+                    }
+                }
                 m.Result = y < strip ? NativeUi.HtTop : y >= Height - strip ? NativeUi.HtBottom : NativeUi.HtClient;
                 return;
             }
@@ -143,9 +169,11 @@ internal sealed class MainWindow : Form
             {
                 float scale = NativeUi.GetDpiForWindow(m.HWnd) / 96f;
                 var info = (NativeUi.MinMaxInfo*)m.LParam;
-                int width = (int)MathF.Round(WidthDip * scale);
-                info->MinTrackSize = new Point(width, (int)MathF.Round(MinHeightDip * scale));
-                info->MaxTrackSize = new Point(width, (int)MathF.Round(MaxHeightDip * scale));
+                int minWidth = _compact ? 1 : AppIdentity.IsPairside ? MinWidthDip : WidthDip;
+                int maxWidth = AppIdentity.IsPairside ? MaxWidthDip : WidthDip;
+                int minHeight = _compact ? 1 : MinHeightDip;
+                info->MinTrackSize = new Point((int)MathF.Round(minWidth * scale), (int)MathF.Round(minHeight * scale));
+                info->MaxTrackSize = new Point((int)MathF.Round(maxWidth * scale), (int)MathF.Round(MaxHeightDip * scale));
                 m.Result = 0;
                 return;
             }
@@ -158,7 +186,7 @@ internal sealed class MainWindow : Form
             }
             case NativeUi.WmExitSizeMove:
                 base.WndProc(ref m);
-                HeightChanged?.Invoke(Height / DpiScale);
+                Resized?.Invoke(Width / DpiScale, Height / DpiScale);
                 return;
             default:
                 base.WndProc(ref m);
@@ -171,6 +199,7 @@ internal sealed class MainWindow : Form
     private Rectangle PaneBounds()
     {
         int strip = Strip();
-        return new Rectangle(0, strip, Width, Math.Max(0, Height - 2 * strip));
+        int horizontal = AppIdentity.IsPairside ? strip : 0;
+        return new Rectangle(horizontal, strip, Math.Max(0, Width - 2 * horizontal), Math.Max(0, Height - 2 * strip));
     }
 }

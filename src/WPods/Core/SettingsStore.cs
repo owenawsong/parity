@@ -16,10 +16,24 @@ public enum MicMode
 /// <summary>Host-side settings of one device; editable while it is disconnected.</summary>
 public sealed record HostSettings
 {
-    public static readonly HostSettings Default = new();
+    public static readonly HostSettings Default = new() { LowLatencyMic = false };
+
+    private bool? _lowLatencyMic;
 
     public bool DisableHandsFree { get; init; } = true;
     public bool LowLatency { get; init; }
+    [JsonIgnore]
+    public bool LowLatencyMic { get => _lowLatencyMic ?? false; init => _lowLatencyMic = value; }
+
+    [JsonInclude, JsonPropertyName("lowLatencyMic")]
+    internal bool? StoredMicLatency { get => LowLatencyMic; init => _lowLatencyMic = value; }
+
+    // Older files have only lowLatency. Keep the mic preference, and make playback keep-alive opt-in.
+    internal HostSettings UpgradeLatency() => _lowLatencyMic.HasValue
+        ? this : this with { LowLatencyMic = LowLatency, LowLatency = false };
+    public bool SleepPause { get; init; }
+    public int? EarResumeSeconds { get; init; }
+    public bool AutomaticPulse { get; init; }
     /// <summary>Saved mic mode; <see cref="MicConfig.EffectiveMode"/> gives the one that runs.</summary>
     [JsonConverter(typeof(MicModeJsonConverter))]
     public MicMode MicMode { get; init; }
@@ -37,12 +51,30 @@ public sealed record UiPrefs
     public static readonly UiPrefs Default = new();
 
     /// <summary>"light", "dark" or "auto".</summary>
-    public string Theme { get; init; } = "auto";
+    public string Theme { get; init; } = AppIdentity.IsPairside ? "dark" : "auto";
+    public bool ReduceMotion { get; init; }
+    public bool PopupSeparateBatteries { get; init; }
     public bool UseAccent { get; init; }
     /// <summary>"system" (Windows UI language) or a locale file's ISO code.</summary>
     public string Language { get; init; } = "system";
     /// <summary>Main window height in DIPs.</summary>
-    public double WindowHeight { get; init; } = 640;
+    public double WindowHeight { get; init; } = AppIdentity.IsPairside ? 648 : 640;
+    public double WindowWidth { get; init; } = AppIdentity.IsPairside ? 529 : 640;
+    public string[] SidebarOrder { get; init; } = [];
+    public string[] AutoConnectDevices { get; init; } = [];
+    public string NodAction { get; init; } = "playPause";
+    public string ShakeAction { get; init; } = "none";
+    public string SpatialPlayer { get; init; } = "windowsMix";
+    public int SpatialSpeakerAngle { get; init; } = 30;
+    public string SpatialLevel { get; init; } = "boost";
+    public int PulseWindowSeconds { get; init; } = 60;
+    public bool PulseSessionScale { get; init; }
+    public string? PulseFeedToken { get; init; }
+    public string GestureSensitivity { get; init; } = "normal";
+    internal static bool IsGestureSensitivity(string? value) => value is "low" or "normal" or "high";
+    internal static bool IsGestureAction(string? action) =>
+        action is "none" or "playPause" or "pause" or "previous" or "next" or "transparency" or "noiseCancellation";
+
     public bool FirstRunDone { get; init; }
     /// <summary>Version whose "update available" note the user dismissed.</summary>
     public string? DismissedUpdate { get; init; }
@@ -174,8 +206,10 @@ public sealed class SettingsStore
 
     public SettingsStore()
         : this(
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WPods"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".wpods", "device_settings.jsonl"))
+            AppIdentity.Profile,
+            AppIdentity.IsPairside
+                ? Path.Combine(AppIdentity.Profile, "device_settings.jsonl")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".wpods", "device_settings.jsonl"))
     {
     }
 
@@ -370,14 +404,16 @@ public sealed class SettingsStore
     }
 
     /// <summary>Raises <see cref="HostSettingsChanged"/> when the settings differ from the stored ones, even when saving throws.</summary>
-    internal void Set(ulong address, HostSettings settings)
+    internal void Set(ulong address, HostSettings settings) => StoreHostSettings(address, settings, onlyIfMissing: false);
+
+    private void StoreHostSettings(ulong address, HostSettings settings, bool onlyIfMissing)
     {
         bool changed = false;
         try
         {
             lock (_lock)
             {
-                if (_devices.TryGetValue(address, out HostSettings? current) && current == settings)
+                if (_devices.TryGetValue(address, out HostSettings? current) && (onlyIfMissing || current == settings))
                 {
                     return;
                 }
@@ -392,6 +428,15 @@ public sealed class SettingsStore
             {
                 HostSettingsChanged?.Invoke(address, settings);
             }
+        }
+    }
+
+    // Older pairs only expose a working Windows hands-free mic. Never overwrite a saved choice.
+    internal void SeedMicDefaults(ulong address, string? modelNumber)
+    {
+        if (!Models.HasStereoMic(modelNumber))
+        {
+            StoreHostSettings(address, HostSettings.Default with { DisableHandsFree = false, MicMode = MicMode.WideSpectrum }, onlyIfMissing: true);
         }
     }
 
@@ -513,7 +558,10 @@ public sealed class SettingsStore
             }
             // A JSON null bypasses the nullable annotations: every collection, entry and UI string is checked here.
             UiPrefs ui = file.Ui ?? UiPrefs.Default;
-            _ui = ui with { Theme = ui.Theme ?? UiPrefs.Default.Theme, Language = ui.Language ?? UiPrefs.Default.Language };
+            _ui = ui with { SidebarOrder = ui.SidebarOrder ?? [], AutoConnectDevices = ui.AutoConnectDevices ?? [], Theme = ui.Theme ?? UiPrefs.Default.Theme, Language = ui.Language ?? UiPrefs.Default.Language };
+            if (!UiPrefs.IsGestureAction(_ui.NodAction)) _ui = _ui with { NodAction = UiPrefs.Default.NodAction };
+            if (!UiPrefs.IsGestureAction(_ui.ShakeAction)) _ui = _ui with { ShakeAction = UiPrefs.Default.ShakeAction };
+            if (!UiPrefs.IsGestureSensitivity(_ui.GestureSensitivity)) _ui = _ui with { GestureSensitivity = UiPrefs.Default.GestureSensitivity };
             _mic = file.Mic is { } mic ? LoadMic(mic) : MicConfig.Default;
             _mixer = file.Mixer is { } mixer ? LoadMixer(mixer) : MixerConfig.Default;
             _hotkeys = file.Hotkeys is { } hotkeys ? LoadHotkeys(hotkeys) : HotkeyConfig.Default;
@@ -525,7 +573,7 @@ public sealed class SettingsStore
             {
                 if (settings is not null && Mac.TryParse(mac, out ulong address))
                 {
-                    _devices[address] = Normalize(address, settings);
+                    _devices[address] = Normalize(address, settings.UpgradeLatency());
                 }
             }
             foreach ((string mac, DeviceModel? model) in file.Models ?? [])
@@ -691,11 +739,18 @@ public sealed class SettingsStore
         if (file.Bindings is not null)
         {
             bindings = [];
+            bool split = file.SplitLatencyBindings || file.Bindings.ContainsKey("lowLatencyMic.on") || file.Bindings.ContainsKey("lowLatencyMic.off");
             foreach ((string action, ShortcutFile? shortcut) in file.Bindings)
             {
                 if (shortcut is { Vk: > 0 and < 0xFF, Mods: >= 0 and <= 0xF })
                 {
-                    bindings[action] = new Shortcut(shortcut.Vk, shortcut.Mods);
+                    string name = split ? action : action switch
+                    {
+                        "lowLatency.on" => "lowLatencyMic.on",
+                        "lowLatency.off" => "lowLatencyMic.off",
+                        _ => action,
+                    };
+                    bindings[name] = new Shortcut(shortcut.Vk, shortcut.Mods);
                 }
             }
         }
@@ -713,7 +768,7 @@ public sealed class SettingsStore
                 bindings[action] = new ShortcutFile { Vk = shortcut.Vk, Mods = shortcut.Mods };
             }
         }
-        return new HotkeyFile { Bindings = bindings, Sounds = config.Sounds };
+        return new HotkeyFile { Bindings = bindings, Sounds = config.Sounds, SplitLatencyBindings = true };
     }
 
     // One-time import of %UserProfile%\.wpods\device_settings.jsonl (left in place).
@@ -740,7 +795,7 @@ public sealed class SettingsStore
                 _devices[address] = new HostSettings
                 {
                     DisableHandsFree = record.DisableHandsFreeMode ?? true,
-                    LowLatency = record.LowLatencyMode ?? false,
+                    LowLatencyMic = record.LowLatencyMode ?? false,
                     MicMode = record.MicMode == "noiseCancelling" ? MicMode.VoiceIsolation : MicMode.Standard,
                 };
             }
@@ -892,6 +947,7 @@ internal sealed class MixerFile
 /// <summary>settings.json "hotkeys": bindings missing until the user first changes one.</summary>
 internal sealed class HotkeyFile
 {
+    public bool SplitLatencyBindings { get; set; }
     public Dictionary<string, ShortcutFile?>? Bindings { get; set; }
     public bool? Sounds { get; set; }
 }

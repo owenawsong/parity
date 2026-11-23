@@ -25,6 +25,7 @@ public enum DeviceChange
     InitialReport = 1 << 10,
     /// <summary>The stored stem press-and-hold cycle of the pair changed (written by the session itself).</summary>
     StemModes = 1 << 11,
+    Sleep = 1 << 12,
 }
 
 /// <summary>Features reported over AAP or in the model baseline; features in neither are hidden.</summary>
@@ -51,7 +52,10 @@ public enum DeviceCapabilities
     HeartRate = 1 << 12,
     /// <summary>Media Assist record (AAP 0x53) reported.</summary>
     MediaAssist = 1 << 13,
+    SleepDetection = 1 << 14,
 }
+
+public readonly record struct OnboardEq(bool Enabled, byte Low, byte Mid, byte High);
 
 public enum SessionStatus
 {
@@ -123,6 +127,8 @@ public enum BatteryStatus : byte
 /// <summary>One battery component; <c>default</c> = not reported / absent.</summary>
 public readonly record struct Battery(byte? Percent, BatteryStatus Status);
 
+internal sealed record CaseBatteryReading(byte Percent, long SeenAt);
+
 /// <summary>
 /// Settings stored on the AirPods themselves (ear detection, mic side, allow off and stem modes are per host);
 /// null = never seen. Remembered per pair for display only.
@@ -138,6 +144,7 @@ internal sealed record PodSettings
     public PressSpeed? PressSpeed { get; init; }
     public HoldDuration? HoldDuration { get; init; }
     public byte? ToneVolume { get; init; }
+    public byte? AdaptiveStrength { get; init; }
     public bool? HearingAidEnrolled { get; init; }
     public bool HearingAidEnabled { get; init; }
     public bool? MediaAssistCalls { get; init; }
@@ -170,6 +177,13 @@ public sealed class DeviceState
     // Indexed by AAP control-setting id (0x09 packets); NotReported until the device reports it.
     private readonly byte[] _settings = CreateSettings();
     private readonly Battery[] _batteries = new Battery[4];
+#if PAIRSIDE_LIVE
+    internal sealed record BatteryReport(Battery Value, long At);
+    private readonly BatteryReport?[] _batteryReports = new BatteryReport?[4];
+    internal BatteryReport? BatteryReportAt(int slot) => Volatile.Read(ref _batteryReports[slot]);
+#endif
+    private CaseBatteryReading? _lastCaseReading;
+    private long _lastCasePublishedAt;
     private byte _hearingAidEnabled = NotReported;
     // Latest valid 0x53 record, replaced whole and never changed in place.
     private byte[]? _mediaAssist;
@@ -178,12 +192,18 @@ public sealed class DeviceState
     private byte _primaryPod;
     private bool _budRoleSeen;
     // Sent listening modes not yet reported back, oldest first. The newest is shown to avoid flicker until
-    // ListeningModeQuietMs after the last request or report, then the device's latest report wins.
-    private readonly List<(int Id, byte Mode)> _sentModes = [];
+    // ListeningModeQuietMs after the last request, then the device's latest report wins.
+    private readonly List<(int Id, byte Mode, long Until)> _sentModes = [];
+    // A newer report can overtake an older one. Budget only the echoes skipped by a match.
+    private readonly List<(byte Mode, long Until)> _skippedModeEchoes = [];
     private int _sentModeId;
+    internal sealed record ModeSelection(ListeningMode? Mode, bool Pending);
+    private volatile ModeSelection _modeSelection = new(null, false);
+    internal ModeSelection ListeningModeSelection => _modeSelection;
+    internal ListeningMode? ReportedListeningMode => ParseMode(_deviceMode);
     private long _sentModesUntil;
     // Latest listening mode the device reported (applied or not); 0 = none yet.
-    private byte _deviceMode;
+    private volatile byte _deviceMode;
     // A battery packet arrived in this session.
     private bool _batteryReported;
     // UI display only: the session this one replaced in an automatic re-attach (CarryOver).
@@ -205,6 +225,15 @@ public sealed class DeviceState
     /// <summary><see cref="Reported"/> plus the baseline of the model.</summary>
     public DeviceCapabilities Capabilities { get; private set; }
 
+    internal bool SupportsListeningMode(ListeningMode mode) =>
+        (Capabilities & DeviceCapabilities.ListeningMode) != 0 && (mode switch
+        {
+            Core.ListeningMode.Transparency or Core.ListeningMode.NoiseCancellation => true,
+            Core.ListeningMode.Off => (Capabilities & DeviceCapabilities.AllowOff) == 0 || AllowOff != false,
+            Core.ListeningMode.Adaptive => (Capabilities & DeviceCapabilities.Adaptive) != 0,
+            _ => false,
+        });
+
     /// <summary>Persisted: capabilities reported on any attach. Only grows.</summary>
     internal DeviceCapabilities Reported { get; private set; }
 
@@ -221,6 +250,7 @@ public sealed class DeviceState
     public Battery LeftBattery => _batteries[Left];
     public Battery RightBattery => _batteries[Right];
     public Battery CaseBattery => _batteries[Case];
+    internal CaseBatteryReading? LastCaseReading => Volatile.Read(ref _lastCaseReading) ?? _previous?.LastCaseReading;
     /// <summary>Over-ear models (AirPods Max).</summary>
     public Battery HeadphoneBattery => _batteries[Headphone];
 
@@ -243,7 +273,7 @@ public sealed class DeviceState
         _ => null,
     };
 
-    public ListeningMode? ListeningMode => _settings[Aap.ListeningModeId] is >= 1 and <= 4 and var v ? (ListeningMode)v : null;
+    public ListeningMode? ListeningMode => _modeSelection.Mode;
     public bool? EarDetection => Flag(Aap.EarDetectionId);
     public bool? ConversationAwareness => Flag(Aap.ConversationAwarenessId);
     public bool? PersonalizedVolume => Flag(Aap.PersonalizedVolumeId);
@@ -252,9 +282,12 @@ public sealed class DeviceState
     /// <summary>Stem press-and-hold cycle (0x1A) as last written by WPods or reported by the device; null until then.</summary>
     public StemModes? StemModes => _settings[Aap.StemModesId] is var v && v != NotReported ? (StemModes)v : null;
     public MicSide? MicSide => _settings[Aap.MicSideId] is <= 2 and var v ? (MicSide)v : null;
+    internal bool? OptimizedCharging => Flag(Aap.OptimizedChargingId);
+    internal byte? CallMutePresses => _settings[CallGesture.SettingId] is 1 or 2 ? _settings[CallGesture.SettingId] : null;
     public PressSpeed? PressSpeed => _settings[Aap.PressSpeedId] is <= 2 and var v ? (PressSpeed)v : null;
     public HoldDuration? HoldDuration => _settings[Aap.HoldDurationId] is <= 2 and var v ? (HoldDuration)v : null;
     public byte? ToneVolume => _settings[Aap.ToneVolumeId] is var v && v != NotReported ? Math.Min(v, (byte)100) : null;
+    public byte? AdaptiveStrength => _settings[Aap.AdaptiveStrengthId] is <= 100 and var v ? v : null;
     public bool? HearingAidEnrolled => Flag(Aap.HearingAidId);
     /// <summary>Hearing aid (0x2C enabled byte) and Hearing Assist (0x33) both on.</summary>
     public bool HearingAidEnabled => _hearingAidEnabled == 1 && _settings[Aap.HearingAssistId] == 1;
@@ -271,6 +304,9 @@ public sealed class DeviceState
 
     /// <summary>Conversation-awareness level (0x4B byte 9).</summary>
     public byte? ConversationLevel { get; internal set; }
+    public byte? SleepState { get; internal set; }
+    public bool AdaptiveVolumeReported { get; internal set; }
+    public OnboardEq? CustomEq { get; internal set; }
 
     public HeartRateStatus HeartRate { get; internal set; }
     public byte? HeartRateBpm { get; internal set; }
@@ -304,13 +340,14 @@ public sealed class DeviceState
     /// <summary>Pod settings this session reported or wrote, the rest from <paramref name="fallback"/>.</summary>
     internal PodSettings GetPodSettings(PodSettings fallback) => new()
     {
-        ListeningMode = ListeningMode ?? fallback.ListeningMode,
+        ListeningMode = ReportedListeningMode ?? fallback.ListeningMode,
         ConversationAwareness = ConversationAwareness ?? fallback.ConversationAwareness,
         PersonalizedVolume = PersonalizedVolume ?? fallback.PersonalizedVolume,
         OneBudAnc = OneBudAnc ?? fallback.OneBudAnc,
         PressSpeed = PressSpeed ?? fallback.PressSpeed,
         HoldDuration = HoldDuration ?? fallback.HoldDuration,
         ToneVolume = ToneVolume ?? fallback.ToneVolume,
+        AdaptiveStrength = AdaptiveStrength ?? fallback.AdaptiveStrength,
         HearingAidEnrolled = HearingAidEnrolled ?? fallback.HearingAidEnrolled,
         // The enabled byte comes with 0x2C (enrolment).
         HearingAidEnabled = HearingAidEnrolled is null ? fallback.HearingAidEnabled : HearingAidEnabled,
@@ -377,19 +414,18 @@ public sealed class DeviceState
         return left == LeftEar && right == RightEar ? DeviceChange.None : DeviceChange.Ear;
     }
 
-    /// <summary>How long sent listening modes wait for their reports, counted from the last request or report.</summary>
+    /// <summary>How long sent listening modes wait for their reports, counted from the newest request.</summary>
     internal const int ListeningModeQuietMs = 3000;
 
     /// <summary>Records a listening mode being sent; returns its id.</summary>
-    internal int PushListeningMode(byte mode)
+    internal int PushListeningMode(byte mode, long now)
     {
         int id = ++_sentModeId;
-        _sentModes.Add((id, mode));
-        _sentModesUntil = Environment.TickCount64 + ListeningModeQuietMs;
+        _sentModesUntil = now + ListeningModeQuietMs;
+        _sentModes.Add((id, mode, _sentModesUntil));
+        PublishMode(mode, pending: true);
         return id;
     }
-
-    internal bool IsNewestListeningMode(int id) => _sentModes.Count > 0 && _sentModes[^1].Id == id;
 
     /// <summary>Removes a sent mode that was not written; shows the newest one left or the device's latest report.</summary>
     internal bool DropListeningMode(int id)
@@ -401,50 +437,77 @@ public sealed class DeviceState
         }
         _sentModes.RemoveAt(index);
         byte shown = _sentModes.Count > 0 ? _sentModes[^1].Mode : _deviceMode;
-        return shown != 0 && SetSetting(Aap.ListeningModeId, shown);
+        return PublishMode(shown, pending: _sentModes.Count > 0);
     }
 
     /// <summary>
     /// Clears the matching sent mode and all older ones. The report is shown only once no sent mode is left,
     /// otherwise it is remembered until the list times out.
     /// </summary>
-    internal bool ReportListeningMode(byte value)
+    internal bool ReportListeningMode(byte value, long now)
     {
+        if (ParseMode(value) is null) return false;
+        _skippedModeEchoes.RemoveAll(e => e.Until <= now);
+        int index = _sentModes.FindIndex(e => e.Mode == value);
+        int skipped = index < 0 ? _skippedModeEchoes.FindIndex(e => e.Mode == value) : -1;
+        if (skipped >= 0)
+        {
+            _skippedModeEchoes.RemoveAt(skipped);
+            return false;
+        }
+        bool reportedChanged = _deviceMode != value;
         _deviceMode = value;
         if (_sentModes.Count > 0)
         {
-            int index = _sentModes.FindIndex(e => e.Mode == value);
             if (index >= 0)
             {
+                if (index > 0)
+                {
+                    for (int i = 0; i < index; i++)
+                    {
+                        var earlier = _sentModes[i];
+                        if (earlier.Until > now) _skippedModeEchoes.Add((earlier.Mode, earlier.Until));
+                    }
+                }
                 _sentModes.RemoveRange(0, index + 1);
             }
             if (_sentModes.Count > 0)
             {
-                _sentModesUntil = Environment.TickCount64 + ListeningModeQuietMs;
                 Log.Info("aap", $"listening mode report {value} {(index >= 0 ? "matched" : "not requested")}, {_sentModes.Count} sent modes still waiting");
-                return false;
+                // Persist the latest physical mode even while the selection shows a newer request.
+                return reportedChanged;
             }
             Log.Info("aap", $"listening mode {value} reported, all sent modes confirmed");
         }
-        return SetSetting(Aap.ListeningModeId, value);
+        return PublishMode(value, pending: false);
     }
 
     /// <summary>Drops timed-out sent modes for the device's latest report; WaitMs is the time to the next check, 0 if none.</summary>
-    internal (bool Changed, long WaitMs) ExpireListeningModes()
+    internal (bool Changed, long WaitMs) ExpireListeningModes(long now)
     {
         if (_sentModes.Count == 0)
         {
             return (false, 0);
         }
-        long left = _sentModesUntil - Environment.TickCount64;
+        long left = _sentModesUntil - now;
         if (left > 0)
         {
             return (false, left);
         }
         Log.Info("aap", $"{_sentModes.Count} sent listening modes not reported back, showing the device's {(_deviceMode == 0 ? "nothing" : _deviceMode.ToString())}");
         _sentModes.Clear();
-        return (_deviceMode != 0 && SetSetting(Aap.ListeningModeId, _deviceMode), 0);
+        return (PublishMode(_deviceMode, pending: false), 0);
     }
+
+    private bool PublishMode(byte value, bool pending)
+    {
+        ListeningMode? mode = ParseMode(value);
+        if (_modeSelection.Mode == mode && _modeSelection.Pending == pending) return false;
+        _modeSelection = new(mode, pending);
+        return true;
+    }
+
+    private static ListeningMode? ParseMode(byte value) => value is >= 1 and <= 4 ? (ListeningMode)value : null;
 
     /// <summary>The session's first battery entry always counts as a change: it ends the <see cref="BatterySource"/> carry-over.</summary>
     internal bool SetBattery(byte component, Battery battery)
@@ -463,7 +526,19 @@ public sealed class DeviceState
         }
         bool first = !_batteryReported;
         _batteryReported = true;
-        if (_batteries[slot] == battery && !first)
+#if PAIRSIDE_LIVE
+        if (battery.Percent.HasValue)
+            Volatile.Write(ref _batteryReports[slot], new BatteryReport(battery, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+#endif
+        bool refreshCaseAge = false;
+        if (slot == Case && battery.Percent is { } level)
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Volatile.Write(ref _lastCaseReading, new CaseBatteryReading(level, now));
+            refreshCaseAge = now - _lastCasePublishedAt >= 15_000;
+            if (refreshCaseAge || _batteries[slot] != battery) _lastCasePublishedAt = now;
+        }
+        if (_batteries[slot] == battery && !first && !refreshCaseAge)
         {
             return false;
         }

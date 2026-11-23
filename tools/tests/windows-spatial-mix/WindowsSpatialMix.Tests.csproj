@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefineConstants>PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <Compile Include="../../../src/WPods/Audio/AudioEndpoints.cs" />
+    <Compile Include="../../../src/WPods/Audio/EarPlaybackRoutes.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpotifyBridge.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpotifyRouting.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpatialApp.cs" />
+    <Compile Include="../../../src/WPods/Audio/WindowsSpatialMix.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpatialStereo.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpatialPlaybackBuffer.cs" />
+    <Compile Include="../../../src/WPods/Audio/StereoLevelMatch.cs" />
+    <Compile Include="../../../src/WPods/Core/AppIdentity.cs" />
+    <EmbeddedResource Include="../../../src/WPods/Audio/kemar48.bin" LogicalName="Pairside.Kemar48" />
+  </ItemGroup>
+</Project>

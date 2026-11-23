@@ -1,4 +1,5 @@
 import { PairSteps } from '../components/common';
+import { createConnectionDisclosure } from '../components/connectionCheck';
 import { bindAttr } from '../i18n';
 import { Art, Icon } from '../icons';
 import { post } from '../host';
@@ -7,6 +8,7 @@ import type { Ctx, Page } from './page';
 
 export const createEmpty = (ctx: Ctx): Page => {
   const legal = LegalFoot(ctx);
+  const check = createConnectionDisclosure();
   const art = Art({ model: 'empty', class: 'wp-empty__art' });
   bindAttr(art, 'aria-label', 'art.empty');
   const el = (
@@ -28,10 +30,11 @@ export const createEmpty = (ctx: Ctx): Page => {
           </button>
         </div>
         <PairSteps />
+        {check.el}
       </div>
       {legal.el}
     </div>
   ) as HTMLDivElement;
 
-  return { el, sections: {}, returnFocus: () => legal.link };
+  return { el, sections: {connectionCheck: check.paint}, leave:check.leave, returnFocus: () => legal.link };
 };

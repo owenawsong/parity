@@ -2,9 +2,11 @@
    a spinner of its own (the page shows one per group). `desc: null` leaves the description to the render. */
 import { bindText, type LabelKey } from '../i18n';
 import { type Busy, createBusy, createSwitch } from './common';
+import { Icon, type IconName } from '../icons';
 
 export type SwitchRow = {
   row: HTMLDivElement;
+  title: HTMLSpanElement;
   input: HTMLInputElement;
   desc: HTMLSpanElement;
   busy: Busy | null;
@@ -16,9 +18,11 @@ export const createSwitchRow = (o: {
   desc: LabelKey | null;
   stack?: boolean;
   checking?: boolean;
+  icon?: IconName;
   onChange: (on: boolean) => void;
 }): SwitchRow => {
   const sw = createSwitch(o.id, o.onChange);
+  let title!: HTMLSpanElement;
   const desc = (<span class="wp-row__desc" />) as HTMLSpanElement;
   if (o.desc) {
     desc.append(bindText(o.desc));
@@ -27,15 +31,17 @@ export const createSwitchRow = (o: {
   }
   const text = (
     <div class="wp-row__text">
-      <span class="wp-row__title" id={o.id} l:text={o.title} />
+      <span class="wp-row__title" id={o.id} l:text={o.title} ref={title} />
       {desc}
     </div>
   );
   const busy = o.checking ? createBusy(sw.input, [sw.input]) : null;
+  const lead = o.icon ? <span class="wp-row__lead" aria-hidden="true"><Icon name={o.icon} /></span> : document.createDocumentFragment();
   let row: HTMLDivElement;
   if (o.stack) {
     const head = (
       <div class="wp-row__head">
+        {lead}
         {text}
         {sw.el}
       </div>
@@ -44,11 +50,12 @@ export const createSwitchRow = (o: {
   } else {
     row = (
       <div class="wp-row">
+        {lead}
         {text}
         {sw.el}
       </div>
     ) as HTMLDivElement;
   }
 
-  return { row, input: sw.input, desc, busy };
+  return { row, title, input: sw.input, desc, busy };
 };

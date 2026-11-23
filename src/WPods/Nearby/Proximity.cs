@@ -6,6 +6,8 @@ namespace WPods.Nearby;
 /// <summary>Batteries of a nearby pair; absent = default. <see cref="Headphone"/> is used instead of the others for single-battery models.</summary>
 public readonly record struct PodBatteries(Battery Left, Battery Right, Battery Case, Battery Headphone);
 
+internal readonly record struct CaseBroadcast(Battery Battery, long SeenAt, bool Direct);
+
 /// <summary>
 /// Apple Continuity Proximity Pairing advert: manufacturer payload after company ID 0x004C, 27 bytes, type 0x07.
 /// Layout: [1] length 0x19, [2] 0x01 = paired, [3..4] model, [5] status (bit 5 = left first), [6] pod nibbles,
@@ -23,6 +25,46 @@ internal static class Proximity
         addressType == 1 && address >> 46 == 0b01
         && data.Length == Length && data[0] == 0x07 && data[1] == Length - 2 && data[2] == 0x01;
 
+    public static bool IsCaseBroadcast(ReadOnlySpan<byte> data) =>
+        data.Length == 19 && data[0] == 0x07 && data[1] == 0x11 && data[2] == 0x06;
+
+    // Apple can bundle more than one type/length/value record in a manufacturer data section.
+    public static bool TryReadField(ref ReadOnlySpan<byte> data, out ReadOnlySpan<byte> field)
+    {
+        if (data.Length < 2 || data.Length < data[1] + 2)
+        {
+            field = default;
+            return false;
+        }
+        int size = data[1] + 2;
+        field = data[..size];
+        data = data[size..];
+        return true;
+    }
+
+    /// <summary>AirPods Pro 3 case adverts use the paired ENC_KEY, even when the earbuds are out.</summary>
+    public static bool TryReadCaseBroadcast(ReadOnlySpan<byte> data, Aes encKey, out Battery battery, out bool knownHeader)
+    {
+        Span<byte> plain = stackalloc byte[16];
+        encKey.DecryptEcb(data[3..], plain, PaddingMode.None);
+
+        // Layout check for distinguishing paired keys. Bytes 6–7 vary by firmware, and 12–15 contain a counter.
+        // https://github.com/stuffz/airpods/blob/main/docs/ble-research.md#case-controlled-changes
+        knownHeader = plain[0] == 0x29 && plain[1] == 0x20;
+        battery = default;
+        // A Pro 3 case also transmits 01 at offset 10 with its lid shut and both buds out.
+        // Its meaning is unknown; keep validating the surrounding layout and all three levels.
+        if (!knownHeader || plain[8] != 0 || plain[10] > 1 || plain[11] != 0 || !ValidOrAbsent(plain[3])
+            || !ValidOrAbsent(plain[4]) || !ValidOrAbsent(plain[5]))
+        {
+            return false;
+        }
+        battery = FromLevel(plain[3], default);
+        return true;
+    }
+
+    private static bool ValidOrAbsent(byte value) => value == Absent || (value & 0x7F) <= MaxLevel;
+
     /// <summary>Bytes 3-4 little-endian (Apple Bluetooth product ID).</summary>
     public static ushort ModelId(ReadOnlySpan<byte> data) => (ushort)(data[3] | data[4] << 8);
 
@@ -30,6 +72,20 @@ internal static class Proximity
 
     /// <summary>Status bit 2 (both in case), bit 4 (one in case) or bit 6 (this bud in case).</summary>
     public static bool IsBudInCase(ReadOnlySpan<byte> data) => (data[5] & 0x54) != 0;
+
+    // Use fresh, verified bud levels. Fully charged buds can stop charging in their slots;
+    // the case itself need not have reported its battery for the docked buds to provide RSSI.
+    public static bool HasDockedEarbudSignal(ReadOnlySpan<byte> data, in PodBatteries observed)
+    {
+        if (AreBothInCase(data)) return Docked(observed.Left) && Docked(observed.Right);
+        // Bit 6 is specific to the transmitting bud. "One bud in case" alone
+        // (bit 4) may come from the other bud, whose RSSI can't locate the case.
+        if ((data[5] & 0x40) == 0) return false;
+        return Docked((data[5] & 0x20) != 0 ? observed.Left : observed.Right);
+    }
+
+    private static bool Docked(Battery bud) =>
+        bud.Percent is not null && (bud.Status == BatteryStatus.Charging || bud.Percent == 100);
 
     /// <summary>Status bit 2: both buds in the case.</summary>
     public static bool AreBothInCase(ReadOnlySpan<byte> data) => (data[5] & 0x04) != 0;
@@ -68,8 +124,9 @@ internal static class Proximity
     /// disagrees and at least one agrees. Else null (tampered or not from this pair). A decrypted level that is neither
     /// valid nor 0xFF (absent) keeps the matching value of <paramref name="previous"/>.
     /// </summary>
-    public static PodBatteries? ReadBatteries(ReadOnlySpan<byte> data, Aes encKey, bool single, in PodBatteries previous)
+    public static PodBatteries? ReadBatteries(ReadOnlySpan<byte> data, Aes encKey, bool single, in PodBatteries previous, out PodBatteries observed)
     {
+        observed = default;
         bool leftFirst = (data[5] & 0x20) != 0;
         int low = data[6] & 0x0F;
         int high = data[6] >> 4;
@@ -86,6 +143,10 @@ internal static class Proximity
                 if ((plain[i] & 0x7F) <= MaxLevel)
                 {
                     headphone = FromLevel(plain[i], previous.Headphone);
+                    if (Agree(clearHeadphone, headphone) == true)
+                    {
+                        observed = new PodBatteries(default, default, default, headphone);
+                    }
                     break;
                 }
             }
@@ -102,7 +163,16 @@ internal static class Proximity
         bool? r = Agree(clearRight, right);
         bool? c = Agree(clearCase, @case);
         bool decrypted = l != false && r != false && c != false && (l == true || r == true || c == true);
-        return decrypted ?new PodBatteries(left, right, @case, default) : null;
+        if (!decrypted)
+        {
+            return null;
+        }
+        // A cached level may be useful to a nearby offer, but it does not establish a new reading.
+        observed = new PodBatteries(
+            l == true ? FromLevel(plain[leftFirst ? 1 : 2], default) : default,
+            r == true ? FromLevel(plain[leftFirst ? 2 : 1], default) : default,
+            c == true ? FromLevel(plain[3], default) : default, default);
+        return new PodBatteries(left, right, @case, default);
     }
 
     private static Battery FromNibble(int nibble, bool charging) =>

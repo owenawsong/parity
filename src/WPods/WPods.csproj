@@ -14,11 +14,27 @@
     <WebView2NeverCopyLoaderDllToOutputDirectory>true</WebView2NeverCopyLoaderDllToOutputDirectory>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(PairsideLive)' == 'true'">
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>Pairside</AssemblyName>
+    <RootNamespace>WPods</RootNamespace>
+    <Product>Parity</Product>
+    <AssemblyTitle>Parity</AssemblyTitle>
+    <Version>0.18.9</Version>
+    <Description>AirPods control for Windows</Description>
+    <ApplicationIcon>../Pairside/Pairside.ico</ApplicationIcon>
+    <ApplicationManifest>../Pairside/app.manifest</ApplicationManifest>
+    <DefineConstants>$(DefineConstants);PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" Condition="'$(PairsideLive)' == 'true'" />
+    <EmbeddedResource Include="Audio\kemar48.bin" LogicalName="Pairside.Kemar48" Condition="'$(PairsideLive)' == 'true'" />
+    <EmbeddedResource Include="../Pairside/Pairside.ico" LogicalName="Pairside.ico" Condition="'$(PairsideLive)' == 'true'" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(PairsideLive)' != 'true'">
     <Content Include="..\..\.build\native\bin\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\.build\native\bin\DeepFilterNet3_onnx.tar.gz" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <!-- Mic mode models, downloaded (native\fetch-models.ps1) -->
@@ -33,9 +49,12 @@
     <Content Include="..\..\.build\native\bin\models\gtcrn_simple.onnx" Link="models\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <!-- Exported (native\export-models.ps1, run by build.ps1 when missing) -->
     <Content Include="..\..\.build\native\bin\models\nsnet2_48k.onnx" Link="models\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="web\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="web\**" CopyToOutputDirectory="PreserveNewest" Condition="'$(ParityPackageWeb)' == ''" />
+    <Content Include="$(ParityPackageWeb)\**\*" Link="web\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="'$(ParityPackageWeb)' != ''" />
     <None Remove="web\**" />
     <Content Include="locales\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

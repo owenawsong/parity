@@ -1,9 +1,9 @@
 // First-run page; "Agree and get started" accepts the not-an-Apple-app terms.
 import { createSwitch } from '../components/common';
 import { setChecked, setText } from '../dom';
-import { post } from '../host';
+import { isPairside, post } from '../host';
 import { t, type LabelKey } from '../i18n';
-import { Icon, type IconName } from '../icons';
+import { Glyph, Icon, type IconName } from '../icons';
 import { current, store } from '../state';
 import type { Ctx, Page } from './page';
 
@@ -39,10 +39,10 @@ export const createFirstRun = (ctx: Ctx): Page => {
   const el = (
     <div class="wp-page">
       <div class="wp-empty">
-        <h1
-          class="wp-empty__title wp-empty__title--display"
-          l:text="firstRun.title"
-        />
+        <h1 class="wp-empty__title wp-empty__title--display wp-welcome__heading">
+          {isPairside ? <Glyph name="parity" class="wp-brand" /> : ''}
+          <span l:text="firstRun.title" />
+        </h1>
         <p class="wp-empty__body" l:text="firstRun.body" />
         <ul class="wp-steps">
           <Fact icon="pc" title="firstRun.trayTitle" desc="firstRun.trayDesc" />

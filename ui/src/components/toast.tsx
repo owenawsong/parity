@@ -1,6 +1,6 @@
 /* One toast at a time; closes itself after --dur-toast unless hovered or focused. Only its buttons take the pointer
    (app.css), so it never blocks the controls under it. */
-import { setHidden, setText } from '../dom';
+import { readCssTimeMs, setHidden, setText } from '../dom';
 import { t } from '../i18n';
 import { Icon } from '../icons';
 import type { ToastId } from '../protocol';
@@ -37,7 +37,7 @@ export const createToast = (
   let shown: ToastId | null = null;
   let code: string | null = null;
   let timer = 0;
-  let ms = 0;
+  let ms: number | undefined;
   const hide = (): void => {
     clearTimeout(timer);
     shown = null;
@@ -111,11 +111,7 @@ export const createToast = (
   return {
     el,
     show: (id, faultCode) => {
-      if (!ms) {
-        ms =
-          parseFloat(getComputedStyle(el).getPropertyValue('--dur-toast')) ||
-          4000;
-      }
+      ms ??= readCssTimeMs(el, '--dur-toast', 4000);
       shown = id;
       code = faultCode;
       relabel();

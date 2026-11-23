@@ -1,7 +1,6 @@
 /* Hotkeys page: one row per action, grouped by setting. Selecting a row's field records a hotkey (Esc cancels,
    Backspace or Delete clears); the host lets go of every hotkey meanwhile so the keys reach the page. A group or row
    shows when one of the AirPods has the feature, or when it already has a hotkey. */
-import { Note } from '../components/common';
 import {
   capsLabel,
   isPunctuation,
@@ -15,7 +14,7 @@ import {
 } from '../components/keycaps';
 import { createSwitchRow } from '../components/switchRow';
 import { setAttr, setChecked, setClass, setHidden, setText } from '../dom';
-import { post } from '../host';
+import { isPairside, post } from '../host';
 import { bindAttr, t, type LabelKey } from '../i18n';
 import { Icon, type IconName } from '../icons';
 import type { Capability, HotkeyAction, Shortcut } from '../protocol';
@@ -33,6 +32,7 @@ type GroupDef = {
   title: LabelKey;
   cap?: Capability;
   foot?: LabelKey;
+  available?: () => boolean;
   rows: RowDef[];
 };
 type Row = {
@@ -46,7 +46,7 @@ type Row = {
   msgWarn: SVGSVGElement;
   msgText: HTMLSpanElement;
 };
-type Group = { def: GroupDef; el: HTMLElement; rows: Row[] };
+type Group = { def: GroupDef; el: HTMLDetailsElement; count: HTMLSpanElement; warning: HTMLSpanElement; rows: Row[] };
 
 const VK_TAB = 0x09;
 const VK_BACK = 0x08;
@@ -61,7 +61,7 @@ const toggle = (
   title: LabelKey,
   on: HotkeyAction,
   off: HotkeyAction,
-  extra?: { cap?: Capability; foot?: LabelKey },
+  extra?: Pick<GroupDef, 'cap' | 'foot' | 'available'>,
 ): GroupDef => ({
   title,
   ...extra,
@@ -72,6 +72,13 @@ const toggle = (
 });
 
 const GROUPS: GroupDef[] = [
+  {
+    title: 'hotkeys.connection',
+    rows: [
+      { action: 'connection.on', title: 'home.connect' },
+      { action: 'connection.off', title: 'home.disconnect' },
+    ],
+  },
   {
     title: 'nc.title',
     cap: 'listeningMode',
@@ -127,6 +134,9 @@ const GROUPS: GroupDef[] = [
   },
   toggle('mixer.title', 'mixer.on', 'mixer.off'),
   toggle('windows.latency', 'lowLatency.on', 'lowLatency.off'),
+  toggle('windows.latencyMic', 'lowLatencyMic.on', 'lowLatencyMic.off', {
+    available: () => store.devices.some(device => device.stereoMicSupported !== false),
+  }),
   toggle('hotkeys.handsFree', 'handsFree.on', 'handsFree.off'),
   toggle('features.conversation', 'conversation.on', 'conversation.off', {
     cap: 'conversationAwareness',
@@ -138,6 +148,12 @@ const GROUPS: GroupDef[] = [
     cap: 'mediaAssist',
     foot: 'hotkeys.mediaAssistFoot',
   }),
+  {
+    title: 'nav.spatialAudio',
+    available: () => isPairside,
+    cap: 'sleepDetection',
+    rows: [{ action: 'spatial.recenter', title: 'hotkeys.recenterSpatial', desc: 'hotkeys.recenterSpatialDesc', icon: 'locator' }],
+  },
   {
     title: 'app.name',
     rows: [
@@ -191,6 +207,15 @@ export const createHotkeys = (ctx: Ctx): Page => {
   // The last key pressed while recording needs Ctrl, Alt or Win.
   let needsModifier = false;
   const groups: Group[] = [];
+  let search!: HTMLInputElement;
+  let assignedOnly = false;
+  let assignedFilter!: HTMLButtonElement;
+  let assignedCount!: HTMLSpanElement;
+  let empty!: HTMLDivElement;
+  let emptyMessage!: HTMLParagraphElement;
+  let announcement!: HTMLSpanElement;
+  let lastFilter = '';
+  const expandedBeforeFilter = new Set<Group>();
 
   const sounds = createSwitchRow({
     id: 'hkSoundsTitle',
@@ -394,21 +419,54 @@ export const createHotkeys = (ctx: Ctx): Page => {
   };
 
   const el = (
-    <div class="wp-page">
-      {Note({ label: 'hotkeys.note' })}
-      <section class="wp-group">
-        <div class="wp-list">{sounds.row}</div>
-      </section>
+    <div class="wp-page wp-preferences wp-shortcuts">
+      <p class="wp-shortcut-intro" l:text="hotkeys.note" />
+      <div class="wp-shortcut-filters">
+        <div class="wp-search">
+          <Icon name="search" class="wp-search__icon" />
+          <input type="search" class="wp-search__input" ref={search} l:aria-label="hotkeys.search" l:placeholder="hotkeys.search"
+            oninput={() => render()} onkeydown={(e) => {
+              if (e.key === 'Escape' && search.value) {
+                e.preventDefault();
+                e.stopPropagation();
+                search.value = '';
+                render();
+              }
+            }} />
+        </div>
+        <button type="button" class="wp-shortcut-filter" aria-pressed="false" ref={assignedFilter}
+          onclick={() => { assignedOnly = !assignedOnly; render(); }}>
+          <span l:text="hotkeys.assigned" /><span ref={assignedCount} />
+        </button>
+      </div>
+      <span class="wp-shortcut-announcement" role="status" ref={announcement} />
+      <div class="wp-shortcut-empty" hidden ref={empty}>
+        <p ref={emptyMessage} />
+        <button type="button" class="wp-link" l:text="hotkeys.showAll" onclick={() => {
+          search.value = '';
+          assignedOnly = false;
+          render();
+          search.focus();
+        }} />
+      </div>
     </div>
   ) as HTMLDivElement;
   for (const def of GROUPS) {
     let list!: HTMLDivElement;
+    let count!: HTMLSpanElement;
+    let warning!: HTMLSpanElement;
     const section = (
-      <section class="wp-group">
-        <h2 class="wp-group__title" l:text={def.title} />
+      <details class="wp-shortcut-group">
+        <summary>
+          <span l:text={def.title} />
+          <span class="wp-shortcut-warning" ref={warning} hidden role="img" l:aria-label="hotkeys.attention"><Icon name="warning" /></span>
+          <small ref={count} /><Icon name="chevron-down" />
+        </summary>
         <div class="wp-list" ref={list} />
-      </section>
-    ) as HTMLElement;
+      </details>
+    ) as HTMLDetailsElement;
+    bindAttr(warning, 'title', 'hotkeys.attention');
+    section.open = groups.length === 0;
     if (def.foot) {
       section.append(<p class="wp-group__foot" l:text={def.foot} />);
     }
@@ -418,9 +476,10 @@ export const createHotkeys = (ctx: Ctx): Page => {
       rows.push(row);
       list.append(row.el);
     }
-    groups.push({ def, el: section, rows });
+    groups.push({ def, el: section, count, warning, rows });
     el.append(section);
   }
+  el.append(<section class="wp-group wp-shortcut-sounds"><div class="wp-list">{sounds.row}</div></section>);
 
   const showMsg = (row: Row, text: string | null, warn: boolean): void => {
     setHidden(row.msg, text === null);
@@ -449,6 +508,7 @@ export const createHotkeys = (ctx: Ctx): Page => {
     const item = store.hotkeys.get(action);
     const isRecording = recording === row;
     const name = actionName(action);
+    setAttr(row.clear, 'aria-label', `${t('hotkeys.clear')} · ${name}`);
     setClass(row.field, 'is-recording', isRecording);
     setClass(row.field, 'is-empty', !item && !isRecording);
     setHidden(row.clear, !item || isRecording);
@@ -515,20 +575,53 @@ export const createHotkeys = (ctx: Ctx): Page => {
 
   const render = (): void => {
     setChecked(sounds.input, store.hotkeySounds);
+    const normalize = (value: string): string => value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+    const terms = normalize(search.value.trim()).split(/\s+/).filter(Boolean);
+    const filter = (assignedOnly ? 'assigned/' : '') + terms.join(' ');
+    if (!lastFilter && filter) {
+      expandedBeforeFilter.clear();
+      for (const group of groups) if (group.el.open) expandedBeforeFilter.add(group);
+    }
+    let totalShown = 0;
     for (const g of groups) {
       let shown = false;
+      let needsAttention = false;
+      let assigned = 0;
       for (const row of g.rows) {
         const cap = row.def.cap ?? g.def.cap;
-        const visible =
-          !cap || anyHas(cap) || store.hotkeys.has(row.def.action);
+        const item = store.hotkeys.get(row.def.action);
+        const supported = (!cap || anyHas(cap)) && (g.def.available?.() ?? true);
+        const available = supported || !!item;
+        let visible = available && (!assignedOnly || !!item);
+        if (visible && terms.length) {
+          const key = item && keyCap(item.vk, item.char);
+          const chord = item && key ? capsLabel([...modCaps(item.mods), key]).replace(/\s*\+\s*/g, '+') : '';
+          const haystack = normalize([t(g.def.title), t(row.def.title), row.def.desc ? t(row.def.desc) : '', chord].join(' '));
+          visible = terms.every(term => haystack.includes(term));
+        }
+        if (recording === row) visible = true;
+        if (!visible && row.el.contains(document.activeElement)) search.focus();
         setHidden(row.el, !visible);
         shown ||= visible;
         if (visible) {
+          totalShown++;
+          if (item) assigned++;
+          if (item && ['taken', 'reserved', 'conflict'].includes(item.status)) needsAttention = true;
           renderRow(row);
         }
       }
+      if (lastFilter !== filter) g.el.open = filter ? shown : expandedBeforeFilter.has(g);
+      setHidden(g.warning, !needsAttention);
+      setHidden(g.count, assigned === 0);
+      if (assigned) setText(g.count, t('hotkeys.assignedCount', { count: assigned }));
       setHidden(g.el, !shown);
     }
+    setAttr(assignedFilter, 'aria-pressed', String(assignedOnly));
+    setText(assignedCount, String(store.hotkeys.size));
+    setHidden(empty, totalShown > 0);
+    if (!totalShown) setText(emptyMessage, t(terms.length ? 'hotkeys.noMatches' : 'hotkeys.noAssigned'));
+    setText(announcement, filter ? t('hotkeys.matches', { count: totalShown }) : '');
+    lastFilter = filter;
   };
 
   return {

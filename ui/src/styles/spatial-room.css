@@ -1,0 +1,172 @@
+.wp-spatial-room {
+  --room-surface: var(--surface-card);
+  --room-line: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  --room-ink: var(--text-primary);
+  --room-soft: var(--text-secondary);
+  width: min(100%, 620px);
+}
+.wp-room {
+  border: 1px solid var(--room-line);
+  border-radius: 19px;
+  background: var(--room-surface);
+  overflow: hidden;
+}
+.wp-room__header, .wp-room__feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wp-room__source { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; font: 550 13px/1.4 var(--font-text); }
+.wp-room > .wp-room__title {
+  min-height: 50px;
+  padding-inline: 16px;
+  font-size: 16px;
+}
+.wp-room[open] > .wp-room__title { border-block-end: 1px solid var(--room-line); }
+.wp-room__body > .wp-room__tools { border-block-start: 1px solid var(--room-line); margin-block-start: 0; }
+.wp-room__tools > summary { min-height: 48px; padding-inline: 16px; }
+.wp-room__tools > summary .wp-icon { flex: none; }
+.wp-room__stream-status { color: var(--room-soft); font-size: 11px; font-weight: 500; margin-inline-start: auto; text-align: end; }
+.wp-room__tools > summary .wp-room__stream-status:not([hidden]) + .wp-icon { margin-inline-start: 0; }
+.wp-page .wp-room__source select { inline-size: min(57%, 212px); }
+.wp-room__source select::picker(select) { min-inline-size: min(212px, 70vw); }
+.wp-room__header { padding: 14px 16px 0; }
+.wp-room__header > div { min-width: 0; }
+.wp-room__route small { display: block; margin-bottom: 3px; color: var(--room-soft); font: 550 12px/1.4 var(--font-text); }
+.wp-room__route h2 { overflow-wrap: anywhere; }
+.wp-room__header h2 { margin: 0; font: 650 17px/1.25 var(--font-display); letter-spacing: -.025em; }
+.wp-room__header p, .wp-room__feedback p { margin: 3px 0 0; color: var(--room-soft); font: 400 12px/1.45 var(--font-text); }
+.wp-room__header p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-room__field {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  --room-stage-size: clamp(166px, 28vh, 244px);
+  block-size: calc(var(--room-stage-size) + 24px);
+  color: var(--room-ink);
+  overflow: hidden;
+}
+.wp-room__field[data-offline] { opacity: .45; }
+.wp-room__field > svg { display: block; width: min(100%, 432px); height: var(--room-stage-size); margin-block: 1px 23px; }
+.wp-room-grid { fill: none; stroke: var(--room-line); stroke-width: 1; }
+.wp-room-stage { fill: color-mix(in srgb, var(--room-ink) 4%, transparent); stroke: var(--room-line); stroke-width: 1; }
+.wp-room-screen { fill: none; stroke: var(--room-soft); stroke-width: 2.5; stroke-linecap: round; }
+.wp-room-listener { transform-origin: 180px 128px; }
+.wp-room-look { fill: color-mix(in srgb, var(--accent-text) 20%, transparent); }
+.wp-room-head { fill: color-mix(in srgb, var(--room-ink) 15%, var(--room-surface)); stroke: var(--room-ink); stroke-width: 1.7; }
+.wp-room-ears { fill: none; stroke: var(--room-ink); stroke-width: 2.2; stroke-linecap: round; }
+.wp-room-speaker { color: var(--room-ink); }
+.wp-room-speaker--left { --room-energy: var(--room-left, 0); }
+.wp-room-speaker--right { --room-energy: var(--room-right, 0); }
+.wp-room-speaker .wp-room-energy {
+  fill: var(--accent-text);
+  opacity: calc(var(--room-energy) * .28);
+  transform: scale(clamp(.72, calc(.72 + var(--room-energy) * .38), 1.1));
+  transform-origin: 0 0;
+}
+.wp-room-speaker rect { fill: var(--room-surface); stroke: currentColor; stroke-width: 1.5; }
+.wp-room-speaker circle { fill: currentColor; }
+.wp-room-speaker--left { transform: translate(calc(180px - var(--room-dx, 46px)),var(--room-y, 48px)); --room-aim: calc(0deg - var(--room-angle, 30deg)); }
+.wp-room-speaker--right { transform: translate(calc(180px + var(--room-dx, 46px)),var(--room-y, 48px)); --room-aim: var(--room-angle, 30deg); }
+.wp-room-driver { transform: rotate(var(--room-aim)); }
+.wp-room-channel { fill: none; stroke: var(--room-soft); stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.wp-room__field[data-mode='stereo'] .wp-room-speaker--left { transform: translate(121px,128px); --room-aim: -90deg; }
+.wp-room__field[data-mode='stereo'] .wp-room-speaker--right { transform: translate(239px,128px); --room-aim: 90deg; }
+.wp-room__field[data-mode='stereo'] .wp-room-stage,
+.wp-room__field:not([data-mode='tracked']) :is(.wp-room-screen,.wp-room-look) { opacity: 0; }
+.wp-room-facing { position: absolute; inset-block-end: 5px; font: 550 12px/1.2 var(--font-text); font-variant-numeric: tabular-nums; color: var(--room-soft); }
+.wp-room__console { padding: 7px 16px 13px; }
+.wp-room__spacing { padding: 5px 16px 14px; }
+.wp-room__spacing header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+.wp-room__spacing h3 { margin: 0; font: 600 14px/1.4 var(--font-text); }
+.wp-room__spacing output { color: var(--room-soft); font: 550 12px/1.4 var(--font-text); font-variant-numeric: tabular-nums; }
+.wp-room__spacing .wp-seg { width: 100%; }
+.wp-room__level { margin-block-start: 14px; padding-block-start: 13px; border-block-start: 1px solid var(--room-line); }
+.wp-room__level h3 { margin-block-end: 8px; }
+.wp-room__spacing p { margin: 8px 0 0; color: var(--room-soft); font: 400 12px/1.4 var(--font-text); }
+.wp-room__check { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; }
+.wp-room__check button { margin-top: 6px; }
+.wp-room__check button[aria-pressed='true'] { color: var(--accent-text); background: var(--fill-control); }
+.wp-room__paths { padding: 0 16px; }
+.wp-room__paths ul { list-style: none; margin: 0 0 9px; padding: 0; }
+.wp-room__paths li { display: flex; justify-content: space-between; flex-wrap: wrap; padding-block: 7px; gap: 4px 12px; font: 500 13px/1.3 var(--font-text); overflow-wrap: anywhere; }
+.wp-room__paths li small, .wp-room__paths p { color: var(--room-soft); font: 400 12px/1.4 var(--font-text); }
+.wp-room__paths li button { font-size: 12px; margin-inline-start: auto; }
+.wp-room__paths p { margin: 5px 0 12px; }
+.wp-room__mode-select { padding: 10px 16px 0; }
+.wp-room__mode-select .wp-seg { width: 100%; }
+.wp-room__mode-select .wp-seg__face { min-height: 35px; align-items: center; }
+.wp-room__feedback { min-height: 30px; margin-top: 3px; gap: 8px 14px; flex-wrap: wrap; }
+.wp-room__feedback p { flex: 1 1 150px; }
+.wp-room__feedback p { margin: 0; }
+.wp-room__feedback button { flex: none; }
+.wp-audio-motion .wp-sound-windows { border: 0; border-block-start: 1px solid var(--separator); background: transparent; border-radius: 0; }
+.wp-audio-motion .wp-sound-windows summary { display: flex; gap: 12px; align-items: center; min-height: 50px; padding-inline: 4px; cursor: pointer; list-style: none; font: 550 13px/1.4 var(--font-text); }
+.wp-audio-motion .wp-sound-windows summary::-webkit-details-marker { display: none; }
+.wp-audio-motion .wp-sound-windows summary > .wp-icon { width: 17px; height: 17px; color: var(--text-secondary); }
+.wp-audio-motion .wp-sound-windows summary > .wp-icon:last-child { width: 14px; margin-inline-start: auto; }
+.wp-audio-motion .wp-sound-windows[open] summary > .wp-icon:last-child { rotate: 180deg; }
+.wp-spatial-room .wp-local-spatial .wp-spatial__card { display: grid; gap: 12px; padding: 14px; }
+.wp-spatial-room .wp-spatial__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .wp-room-energy { transition: transform 100ms linear, opacity 100ms linear; }
+  .wp-room-listener { transition: transform 45ms linear; }
+  .wp-room-speaker, .wp-room-driver { transition: transform 240ms var(--ease-enter); }
+  .wp-room-stage { transition: d 240ms var(--ease-enter), opacity 180ms; }
+  .wp-room-screen, .wp-room-look { transition: opacity 180ms; }
+
+}
+@media (forced-colors: active) {
+  .wp-room { border-color: CanvasText; }
+  .wp-room-grid { stroke: GrayText; }
+  .wp-room-speaker rect, .wp-room-stage { stroke: CanvasText; }
+  .wp-room-head, .wp-room-speaker circle { fill: CanvasText; }
+}
+.wp-spatial-room .wp-local-spatial .wp-spatial__card {
+  padding: 16px;
+  gap: 14px;
+  margin: 0;
+  border-radius: 0;
+  border-block-start: 1px solid var(--room-line);
+  background: transparent;
+}
+.wp-spatial-room .wp-local-spatial .wp-spatial__source { gap: 10px; }
+.wp-spatial-room .wp-local-spatial .wp-spatial__icon { display: none; }
+.wp-spatial-room .wp-local-spatial .wp-spatial__source { grid-template-columns: minmax(0,1fr) auto; }
+.wp-spatial-room .wp-spatial__source-select { align-items: start; gap: 5px; }
+.wp-spatial-room .wp-spatial__placement { flex-direction: column; align-items: stretch; gap: 6px; }
+.wp-spatial-room .wp-spatial__placement > .wp-seg { flex: none; width: 100%; margin: 0; }
+.wp-spatial-room .wp-spatial__source-select select { min-height: 32px; padding-inline: 6px; }
+.wp-spatial-room .wp-spatial__source .wp-link { align-self: end; min-height: 32px; }
+.wp-spatial-room .wp-local-spatial .wp-row__desc { margin: 0; }
+.wp-spatial-room .wp-spatial__actions .wp-btn { min-width: 68px; }
+@media (max-width: 360px) {
+  .wp-spatial-room .wp-local-spatial > summary { padding-inline: 11px; gap: 9px; }
+  .wp-spatial-room .wp-local-spatial .wp-spatial__card { padding: 12px; }
+}
+.wp-room__route { flex: 1 1 0; }
+.wp-room__route h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-room__header { align-items: flex-start; }
+.wp-room__header p { min-height: 1.45em; }
+.wp-room__header p[hidden] { display: block !important; visibility: hidden; }
+.wp-room__feedback { min-height: 44px; }
+.wp-room__feedback p { min-width: 0; }
+.wp-room-modes[aria-busy='true'] .wp-seg__input { cursor: progress; }
+.wp-room-modes[aria-busy='true'] .wp-seg__input:checked + .wp-seg__face::after {
+  content: '';
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  margin-inline-start: 6px;
+  border: 1px solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: wp-room-switching 700ms linear infinite;
+}
+@keyframes wp-room-switching { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .wp-room-modes[aria-busy='true'] .wp-seg__input:checked + .wp-seg__face::after { animation: none; }
+}
+.wp-spatial__preview-mode { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }

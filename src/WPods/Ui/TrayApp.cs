@@ -33,6 +33,7 @@ internal sealed partial class TrayApp : ApplicationContext
         Caps = 1 << 12,
         Checking = 1 << 13,
         Mixer = 1 << 14,
+        CaseBattery = 1 << 15,
     }
 
     // Main-page messages whose last sent JSON is kept to skip sends that change nothing.
@@ -110,6 +111,40 @@ internal sealed partial class TrayApp : ApplicationContext
     private bool _exiting;
     // Last device/conn summary written to the log (UI thread).
     private string _connLogged = "";
+    private readonly CaseBatteryHistory? _caseHistory = AppIdentity.IsPairside
+        ? new(Path.Combine(AppIdentity.Profile, "case-battery.json")) : null;
+    private readonly ConnectionActivity? _activity = AppIdentity.IsPairside
+        ? new(Path.Combine(AppIdentity.Profile, "connection-activity.json"), TimeProvider.System) : null;
+    private readonly System.Windows.Forms.Timer _activityTimer = new() { Interval = 60_000 };
+
+    private void UpdateActivity(bool checkpoint)
+    {
+        if (checkpoint) CheckpointCaseBattery();
+        if (_activity is null) return;
+        var active = _connections.Session;
+        var changed = _activity.Update(active?.State.Status == SessionStatus.Ready ? active.Address : null);
+        if (!changed && !checkpoint) return;
+        _activity.Save();
+        if (MainLive) SendActivity();
+    }
+
+    private void CheckpointCaseBattery()
+    {
+#if PAIRSIDE_LIVE
+        CollectBatteryHistory(checkpoint: true);
+#endif
+        if (_session?.State.LastCaseReading is { } latest)
+            _caseHistory?.Observe(_session.Address, latest);
+        _caseHistory?.Save();
+    }
+
+    private void SendActivity()
+    {
+        if (_activity is null) return;
+        var writer = _writer.Begin("connectionActivity");
+        _activity.Write(writer);
+        PostMain(_writer.End());
+    }
 
     public TrayApp(SettingsStore settings, ConnectionManager connections, NearbyService nearby, MicPipeline mic,
         LowLatencyKeepAlive keepAlive, ConversationDucker ducker, Mixer mixer, Localization locales, bool startHidden)
@@ -123,7 +158,14 @@ internal sealed partial class TrayApp : ApplicationContext
         _locales = locales;
         SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
         _ui = SynchronizationContext.Current!;
+#if PAIRSIDE_LIVE
+        InitSpotify();
+        _batteryTimeline.Load(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+#endif
         _prefs = settings.Ui;
+#if PAIRSIDE_LIVE
+        if (_prefs.PulseFeedToken is { Length: 48 } token && token.All(Uri.IsHexDigit)) StartPulseFeed(token);
+#endif
         _locale = locales.Resolve(_prefs.Language);
         Log.Info("ui", $"start: hidden={startHidden}, language={_prefs.Language} -> {_locale.Code}, theme={_prefs.Theme}");
         _lightTaskbar = WindowsTheme.TaskbarUsesLight();
@@ -132,10 +174,24 @@ internal sealed partial class TrayApp : ApplicationContext
         _trayDpi = NativeUi.PrimaryMonitor().Dpi;
         _micStatus = mic.Status;
         _micSeen = _micStatus;
+#if PAIRSIDE_LIVE
+        using Stream appIconData = typeof(TrayApp).Assembly.GetManifestResourceStream("Pairside.ico")!;
+        _appIcon = new Icon(appIconData);
+#else
         _appIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!)!;
+#endif
         _host = new HostWindow(OnColorsChanged, OnDisplayChanged, OnHotKey);
+        _host.SystemResumed += _nearby.OnSystemResume;
         StartHotkeys();
+        if (_activity is not null)
+        {
+            _activityTimer.Tick += (_, _) => UpdateActivity(true);
+            _activityTimer.Start();
+        }
         _hideTimer.Tick += OnHideTimer;
+        _micSetupTimer.Tick += OnMicSetupTick;
+        _headphoneLevelTimer.Tick += OnHeadphoneLevelTick;
+        _caseFinderTimer.Tick += OnCaseFinderTick;
         _popupTimer.Tick += OnPopupTimer;
         _tray = new NotifyIcon();
         _tray.MouseClick += OnTrayClick;
@@ -153,13 +209,17 @@ internal sealed partial class TrayApp : ApplicationContext
         keepAlive.Failed += OnLowLatencyFailed;
         mixer.Changed += () => MarkDirty(Dirty.Mixer);
         nearby.OffersChanged += () => MarkDirty(Dirty.Offers);
+        nearby.CaseBatteryChanged += () => MarkDirty(Dirty.CaseBattery);
         nearby.NearbyChanged += () => MarkDirty(Dirty.Devices);
         Program.ActivationRequested += () => _ui.Post(static s => ((TrayApp)s!).ShowMain(), this);
         _service.Changed += state => _ui.Post(_ => OnServiceState(state), null);
         _serviceDownTimer.Tick += OnServiceDownTimer;
         _settingsResetPending = settings.LoadFailed;
         // Updates run in the service; the app only shows them and forwards the user's choices.
-        _service.UpdateChanged += info => _ui.Post(_ => OnUpdate(info), null);
+        if (!AppIdentity.IsPairside)
+        {
+            _service.UpdateChanged += info => _ui.Post(_ => OnUpdate(info), null);
+        }
 
         _devices = connections.GetDevices();
         UpdateTray();
@@ -426,7 +486,30 @@ internal sealed partial class TrayApp : ApplicationContext
             _micStatus = _mic.Status;
         }
         DeviceState? state = session?.State;
-        TrackModes(session);
+#if PAIRSIDE_LIVE
+        if ((dirty & (Dirty.Battery | Dirty.Session | Dirty.CaseBattery | Dirty.Devices)) != 0)
+            CollectBatteryHistory(checkpoint: false);
+#endif
+        if (_caseHistory is not null && (dirty & (Dirty.Battery | Dirty.Session | Dirty.Devices | Dirty.CaseBattery)) != 0)
+        {
+            if (session?.State.LastCaseReading is { } sample)
+                _caseHistory.Observe(session.Address, sample);
+            if ((dirty & (Dirty.Devices | Dirty.CaseBattery)) != 0)
+                foreach (var device in _devices)
+                    if (_nearby.GetCaseBroadcast(device.Address) is { Battery.Percent: { } pct } report)
+                        _caseHistory.Observe(device.Address, new(pct, report.SeenAt));
+        }
+        if ((dirty & (Dirty.Session | Dirty.ListeningMode | Dirty.HostSettings | Dirty.Mic | Dirty.Settings)) != 0)
+            TrackModes(session);
+#if PAIRSIDE_LIVE
+        if ((dirty & (Dirty.HeartRate | Dirty.Session | Dirty.Status | Dirty.Ear | Dirty.Devices)) != 0)
+            CheckPulseSensor(_connections.Session);
+#endif
+        if ((dirty & (Dirty.Status | Dirty.Session)) != 0)
+        {
+            UpdateActivity(false);
+            UpdateNowPlayingWatch();
+        }
         if (state is not null && (dirty & Dirty.Status) != 0)
         {
             if (state.Status != _sessionStatus)
@@ -443,7 +526,8 @@ internal sealed partial class TrayApp : ApplicationContext
         {
             CheckLowBattery(state);
         }
-        UpdateTray();
+        if ((dirty & (Dirty.Session | Dirty.Status | Dirty.Battery | Dirty.Ear | Dirty.Mic | Dirty.Devices)) != 0)
+            UpdateTray();
         if (MainLive)
         {
             SendMainDeltas(dirty, state);
@@ -485,7 +569,7 @@ internal sealed partial class TrayApp : ApplicationContext
 
     private void SendMainDeltas(Dirty dirty, DeviceState? state)
     {
-        if ((dirty & Dirty.Devices) != 0)
+        if ((dirty & (Dirty.Devices | Dirty.CaseBattery)) != 0)
         {
             SendDevices();
         }
@@ -653,10 +737,11 @@ internal sealed partial class TrayApp : ApplicationContext
         w.WriteStartArray("devices");
         foreach (KnownDevice device in _devices)
         {
-            string conn = Conn(device, out NearbyOffer? offer);
-            MessageWriter.WriteDevice(w, device, conn, conn == "elsewhere" ? offer?.Batteries : null, _settings.Get(device.Address),
+            string conn = Conn(device, out _);
+            MessageWriter.WriteDevice(w, device, conn, conn == "elsewhere" ? _nearby.GetNearbyBatteries(device.Address) : null, _settings.Get(device.Address),
                 _settings.GetPodSettings(device.Address), _settings.GetEarDetection(device.Address),
-                _settings.GetAllowOff(device.Address), _settings.GetMicSide(device.Address));
+                _settings.GetAllowOff(device.Address), _settings.GetMicSide(device.Address), _nearby.CaseLidOpen(device.Address),
+                _nearby.GetCaseBroadcast(device.Address), _caseHistory?.Get(device.Address));
         }
         w.WriteEndArray();
         if (_session is { } session)
@@ -720,7 +805,7 @@ internal sealed partial class TrayApp : ApplicationContext
         else
         {
             Log.Info("ui", "tray click: show window");
-            ShowMain();
+            ShowMain(compact: true);
         }
     }
 
@@ -904,6 +989,24 @@ internal sealed partial class TrayApp : ApplicationContext
         }
         Log.Info("ui", "exit requested");
         _exiting = true;
+#if PAIRSIDE_LIVE
+        _appleImport?.Cancel();
+        _pulseFeed?.Dispose();
+        _pulseFeed = null;
+#endif
+        StopHeadphoneLevel();
+        await _headphoneLevelCompletion;
+        _headphoneLevelTimer.Dispose();
+        StopHeadMotion();
+        await _motionStop;
+#if PAIRSIDE_LIVE
+        EndPulse(null);
+        await ShutdownSpotify();
+#endif
+        _activityTimer.Dispose();
+        CheckpointCaseBattery();
+        _activity?.Update(null);
+        _activity?.Save();
         DestroyPopup();
         DestroyOsd();
         DestroyMain();
@@ -916,9 +1019,12 @@ internal sealed partial class TrayApp : ApplicationContext
         _service.Dispose();
         _serviceDownTimer.Dispose();
         _osdTimer.Dispose();
+        _micSetupTimer.Dispose();
+        _caseFinderTimer.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _trayIcon?.Dispose();
+        _appIcon.Dispose();
         NativeUi.DestroyIcon(_trayIconHandle);
         _host.Dispose();
         Application.Exit();

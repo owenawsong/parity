@@ -1,0 +1,87 @@
+.wp-tool-details summary {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 8px 14px;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+.wp-tool-details summary::-webkit-details-marker { display: none; }
+.wp-tool-details summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -3px;
+  border-radius: inherit;
+}
+.wp-tool-details summary:hover { background: var(--fill-subtle-hover); }
+.wp-tool-details summary > .wp-icon { color: var(--text-secondary); }
+.wp-tool-details summary > .wp-icon:last-child { margin-inline-start: auto; width: 13px; }
+.wp-tool-details[open] > summary > .wp-icon:last-child { rotate: 180deg; }
+.wp-tool-details__body { border-block-start: 1px solid var(--pairside-line); }
+.wp-tool-details + .wp-tool-details { margin-block-start: -10px; }
+.wp-listen-card__field { display: grid; gap: 5px; min-width: 0; }
+.wp-listen-card__field > span, .wp-listen-card__level {
+  font-size: 12px;
+  font-weight: 600;
+}
+.wp-listen-card__level { display: flex; justify-content: space-between; gap: 12px; }
+.wp-listen-card__level span:last-child, .wp-case-finder__age { font-variant-numeric: tabular-nums; }
+.wp-listen-card__source { width: 100%; min-width: 0; }
+.wp-mic-check:is([data-check='silent'],[data-check='routeSilent'],[data-check='failed']) .wp-mic-check__status {
+  color: var(--text-primary);
+  border-inline-start: 2px solid var(--accent);
+  padding-inline-start: 10px;
+}
+.wp-case-finder__name { font-weight: 600; margin-block-end: 12px; }
+.wp-case-finder__art { margin-block-end: 10px; }
+.wp-case-finder__telemetry {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.wp-case-finder__details { color: var(--text-primary); }
+.wp-case-finder__help { margin-block-start: 0; line-height: 1.5; }
+
+.wp-controls-workspace.wp-preferences {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 18px;
+}
+.wp-gesture-caption h2 { font-size: clamp(19px, 3vw, 25px); font-weight: 600; line-height: 1.2; }
+.wp-controls-workspace > .wp-group > .wp-list,
+.wp-gesture-timing { background: transparent; border: 0; box-shadow: none; border-radius: 0; }
+.wp-gesture-panel { display: grid; min-width: 0; }
+.wp-gesture-device { display: flex; align-items: center; gap: 15px; padding: 7px 14px; border-block: 1px solid var(--pairside-line); }
+.wp-gesture-art { position: relative; width: 88px; height: 74px; flex: none; overflow: hidden; }
+.wp-gesture-art > * { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.wp-gesture-caption { min-width: 0; }
+.wp-gesture-caption span { display: block; overflow-wrap: anywhere; color: var(--text-secondary); font-size: 12px; }
+.wp-gesture-caption h2 { margin: 3px 0 0; }
+.wp-gesture-timing > .wp-row,
+.wp-gesture-level .wp-row { padding-inline: 0; }
+.wp-gesture-timing .wp-row__lead { display: none; }
+.wp-controls-workspace .wp-group__title { padding-inline: 0; }
+.wp-gesture-cycle .wp-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; }
+.wp-gesture-cycle .wp-choice { width: auto; min-height: 36px; gap: 8px; padding: 6px 10px; border: 1px solid var(--pairside-line); border-radius: 7px; }
+.wp-gesture-cycle .wp-choice[aria-checked='true'] { background: var(--fill-subtle-hover); border-color: var(--text-secondary); }
+.wp-gesture-cycle .wp-group__foot { margin-inline: 0; }
+.wp-gesture-level { padding-block-start: 12px; border-block-start: 1px solid var(--pairside-line); }
+@media (min-width: 800px) {
+  .wp-gesture-panel { grid-template-columns: minmax(150px, .65fr) minmax(0, 1.35fr); gap: 22px; align-items: center; }
+  .wp-gesture-device { flex-direction: column; align-self: stretch; justify-content: center; text-align: center; border: 0; border-inline-end: 1px solid var(--pairside-line); }
+  .wp-gesture-art { width: 120px; height: 96px; }
+}
+@media (max-width: 400px) {
+  .wp-record-meters { grid-auto-flow: row; grid-template-columns: 1fr; }
+}
+@media (forced-colors: active) {
+  .wp-record-meters .wp-signal__track i { background: GrayText; }
+  .wp-record-meters .wp-signal__track i.is-lit { background: Highlight; }
+}

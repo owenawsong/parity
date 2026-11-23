@@ -1,0 +1,48 @@
+.wp-health-history {
+  border-block: 1px solid var(--separator);
+  font: 400 13px/1.4 var(--font-text);
+}
+.wp-health-history > summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 2px; gap: 10px; cursor: pointer; font-weight: 580; list-style: none;
+}
+.wp-health-history > summary .wp-icon { width: 14px; height: 14px; color: var(--text-secondary); }
+.wp-health-history[open] > summary .wp-icon { transform: rotate(180deg); }
+.wp-health-history__body { display: grid; gap: 11px; padding: 1px 2px 14px; }
+.wp-health-history__readout { display: grid; gap: 2px; }
+.wp-health-history__readout strong { font: 620 24px/1.1 var(--font-display); letter-spacing: -.035em; }
+.wp-health-history__readout small, .wp-health-day { color: var(--text-secondary); }
+.wp-health-history__graph { display: grid; grid-template-columns: max-content 1fr; gap: 6px; margin: 12px 0 8px; }
+.wp-health-history__scale {
+  display: flex; flex-direction: column; justify-content: space-between; align-items: end;
+  align-self: start; height: 66px; padding-top: 2px; color: var(--text-secondary);
+  font-size: 10px; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.wp-health-history__plot { display: grid; gap: 2px; position: relative; }
+.wp-health-history__plot::before {
+  content: ''; pointer-events: none; position: absolute; inset: 8px 0 auto; height: 52px;
+  box-sizing: content-box; border-block: 1px dotted var(--separator);
+}
+.wp-health-day {
+  cursor: pointer; border: 0; border-radius: 6px; padding: 5px 1px; background: transparent;
+  font-size: 11px; font-variant-numeric: tabular-nums; white-space: normal;
+  display: grid; gap: 6px; justify-items: stretch;
+}
+.wp-health-day:hover { background: var(--surface-card-hover); }
+.wp-health-day[aria-pressed='true'] { background: var(--surface-card); color: var(--text-primary); }
+.wp-health-day__axis { position: relative; display: block; height: 54px; margin-block: 3px; }
+.wp-health-day__axis > span {
+  display: block; position: absolute; left: 50%; width: 6px; margin-left: -3px; min-height: 2px;
+  border-radius: 6px; background: var(--text-secondary);
+}
+.wp-health-day[aria-pressed='true'] .wp-health-day__axis > span { background: var(--accent, Highlight); }
+.wp-health-history__paging, .wp-health-history__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.wp-health-history__paging { justify-content: space-between; margin-block: 4px 9px; }
+.wp-health-history__paging button { display: inline-flex; align-items: center; gap: 3px; }
+.wp-health-history__paging .wp-icon { width: 12px; height: 12px; }
+.wp-health-history__guide > summary { color: var(--text-secondary); width: fit-content; cursor: pointer; }
+.wp-health-history__guide p { margin-top: 6px; }
+@media (forced-colors: active) {
+  .wp-health-day__axis > span { background: CanvasText; forced-color-adjust: none; }
+  .wp-health-day[aria-pressed='true'] { outline: 1px solid Highlight; }
+}

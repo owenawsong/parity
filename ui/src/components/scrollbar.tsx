@@ -1,25 +1,36 @@
-/* Draggable overlay thumb for a scroller with a hidden native bar, so it takes no width; shows while scrolling or
-   hovered. Goes in the scroller's positioned parent. */
+/* One overlay thumb shows scroll position without reserving a layout gutter. */
 import { createFrame, setClass, setHidden } from '../dom';
 
 const MIN_THUMB = 24;
 const INSET = 2;
-const IDLE_MS = 1000;
+const IDLE_MS = 650;
+const MAX_FADE = 64;
 
-export const createOverlayScroll = (scroller: HTMLElement): HTMLDivElement => {
+export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
   let travel = 0;
   let dragging = false;
   let dragY = 0;
   let dragTop = 0;
   let timer = 0;
+  let bottomPadding = 0;
+  let fade = 0;
   const update = (): void => {
     const view = scroller.clientHeight;
     const total = scroller.scrollHeight;
+    const remaining = total - view - scroller.scrollTop;
+    // Bottom padding can still scroll after the last control is fully visible.
+    const nextFade = Math.min(MAX_FADE, Math.round(view * 0.16), Math.max(0, Math.floor(remaining - bottomPadding)));
+    if (nextFade !== fade) {
+      fade = nextFade;
+      scroller.style.setProperty('--scroll-fade', fade + 'px');
+      setClass(scroller, 'wp-body--more', fade > 0);
+    }
     setHidden(el, total <= view);
     if (total <= view) {
       return;
     }
-    const size = Math.max(MIN_THUMB, (view * view) / total);
+    const track = Math.max(0, view - INSET * 2);
+    const size = Math.min(track, Math.max(MIN_THUMB, track * view / total));
     travel = view - size - INSET * 2;
     const top =
       scroller.offsetTop +
@@ -82,7 +93,10 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLDivElement => {
     },
     { passive: true },
   );
-  const resized = new ResizeObserver(update);
+  const resized = new ResizeObserver(() => {
+    bottomPadding = parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+    update();
+  });
   resized.observe(scroller);
   // Pages are swapped in as children, so each one is watched for content growth too.
   new MutationObserver((records) => {
@@ -98,6 +112,7 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLDivElement => {
         }
       }
     }
+    frame();
   }).observe(scroller, { childList: true });
 
   return el;

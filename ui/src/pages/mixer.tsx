@@ -2,6 +2,7 @@ import { Choice } from '../components/choiceList';
 import { Note } from '../components/common';
 import { createSwitchRow } from '../components/switchRow';
 import { setAttr, setChecked, setClass, setHidden, setText } from '../dom';
+import { Icon } from '../icons';
 import { post } from '../host';
 import { t } from '../i18n';
 import type { MixerDevice } from '../protocol';
@@ -14,6 +15,7 @@ type Item = {
   name: Text;
   desc: HTMLSpanElement;
   volume: HTMLDivElement;
+  volumeControls: HTMLDivElement;
   input: HTMLInputElement;
   value: HTMLSpanElement;
 };
@@ -42,7 +44,9 @@ const place = (list: HTMLElement, nodes: HTMLElement[]): void => {
 
 const showVolume = (item: Item, volume: number): void => {
   item.input.style.setProperty('--v', `${volume}%`);
-  setText(item.value, t('battery.pct', { pct: volume }));
+  const reading = t('battery.pct', { pct: volume });
+  setText(item.value, reading);
+  setAttr(item.input, 'aria-valuetext', reading);
 };
 
 export const createMixer = (ctx: Ctx): Page => {
@@ -100,30 +104,35 @@ export const createMixer = (ctx: Ctx): Page => {
       },
       desc,
     );
+    let volumeControls!: HTMLDivElement;
     const volume = (
-      <div class="wp-row wp-mixer__volume">
-        <div class="wp-slider">
-          <input
-            class="wp-slider__input"
-            type="range"
-            min="0"
-            max="100"
-            ref={input}
-            oninput={() => {
-              const v = Number(input.value);
-              item.device.volume = v;
-              showVolume(item, v);
-              post({ type: 'previewMixerVolume', id, value: v });
-            }}
-            onchange={() => {
-              post({ type: 'setMixerVolume', id, value: Number(input.value) });
-            }}
-          />
-          <span class="wp-slider__value" ref={value} />
+      <div class="wp-mixer__volume-panel">
+        <div class="wp-mixer__volume-clip" ref={volumeControls}>
+          <div class="wp-row wp-mixer__volume">
+            <div class="wp-slider">
+              <input
+                class="wp-slider__input"
+                type="range"
+                min="0"
+                max="100"
+                ref={input}
+                oninput={() => {
+                  const v = Number(input.value);
+                  item.device.volume = v;
+                  showVolume(item, v);
+                  post({ type: 'previewMixerVolume', id, value: v });
+                }}
+                onchange={() => {
+                  post({ type: 'setMixerVolume', id, value: Number(input.value) });
+                }}
+              />
+              <span class="wp-slider__value" ref={value} aria-hidden="true" />
+            </div>
+          </div>
         </div>
       </div>
     ) as HTMLDivElement;
-    const item: Item = { device: d, row, name, desc, volume, input, value };
+    const item: Item = { device: d, row, name, desc, volume, volumeControls, input, value };
 
     return item;
   };
@@ -132,17 +141,13 @@ export const createMixer = (ctx: Ctx): Page => {
   let inputList!: HTMLDivElement;
   let outputGroup!: HTMLElement;
   let outputList!: HTMLDivElement;
+  const empty = Note({ label: 'mixer.empty' });
+  const filteredEmpty = Note({ label: 'mixer.filteredEmpty' });
   const el = (
-    <div class="wp-page">
+    <div class="wp-page wp-preferences wp-preferences--stack">
       {Note({ label: 'mixer.note' })}
       <section class="wp-group">
         <div class="wp-list">{enabled.row}</div>
-      </section>
-      <section class="wp-group">
-        <div class="wp-list">
-          {showDisconnected.row}
-          {showDisabled.row}
-        </div>
       </section>
       <section class="wp-group" ref={inputGroup}>
         <h2
@@ -170,6 +175,12 @@ export const createMixer = (ctx: Ctx): Page => {
           ref={outputList}
         />
       </section>
+      <details class="wp-pref-section wp-mixer-filters">
+        <summary><Icon name="controls" /><span><strong l:text="mixer.filters" /></span><Icon name="chevron-down" /></summary>
+        <div class="wp-list">{showDisconnected.row}{showDisabled.row}</div>
+      </details>
+      {empty}
+      {filteredEmpty}
     </div>
   ) as HTMLDivElement;
 
@@ -208,7 +219,8 @@ export const createMixer = (ctx: Ctx): Page => {
           t(d.state === 'disabled' ? 'mixer.disabled' : 'mixer.notConnected'),
         );
       }
-      setHidden(item.volume, !d.on);
+      item.volumeControls.inert = !d.on;
+      setClass(item.volume, 'is-open', d.on);
       setAttr(item.input, 'aria-label', t('mixer.volume', { name: d.name }));
       if (item.input.value !== String(d.volume)) {
         item.input.value = String(d.volume);
@@ -225,6 +237,8 @@ export const createMixer = (ctx: Ctx): Page => {
     place(outputList, outputs);
     setHidden(inputGroup, inputs.length === 0);
     setHidden(outputGroup, outputs.length === 0);
+    setHidden(empty, m.devices.length !== 0);
+    setHidden(filteredEmpty, m.devices.length === 0 || shown.size !== 0);
   };
 
   return { el, sections: { mixer: render } };

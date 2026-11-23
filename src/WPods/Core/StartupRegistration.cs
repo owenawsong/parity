@@ -6,7 +6,7 @@ namespace WPods.Core;
 public static class StartupRegistration
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "WPods";
+    private const string ValueName = AppIdentity.InstallationId;
 
     public static bool IsEnabled()
     {

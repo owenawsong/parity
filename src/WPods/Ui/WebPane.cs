@@ -11,7 +11,7 @@ namespace WPods.Ui;
 /// </summary>
 internal sealed class WebPane : IDisposable
 {
-    private const string HostName = "app.wpods";
+    private static string HostName => AppIdentity.IsPairside ? "app.pairside" : "app.wpods";
 
     private readonly Action<WebPane, PageMessage> _onMessage;
     private readonly Action<WebPane, CoreWebView2ProcessFailedKind> _onFailed;
@@ -20,10 +20,11 @@ internal sealed class WebPane : IDisposable
     private bool _visible = true;
     private bool _disposed;
 
-    public WebPane(Action<WebPane, PageMessage> onMessage, Action<WebPane, CoreWebView2ProcessFailedKind> onFailed)
+    public WebPane(Action<WebPane, PageMessage> onMessage, Action<WebPane, CoreWebView2ProcessFailedKind> onFailed, bool reduceMotion)
     {
         _onMessage = onMessage;
         _onFailed = onFailed;
+        ReduceMotion = reduceMotion;
     }
 
     /// <summary>The page sent "ready" (it has its listener and waits for init).</summary>
@@ -33,7 +34,7 @@ internal sealed class WebPane : IDisposable
     public static Task<CoreWebView2Environment> CreateEnvironmentAsync() =>
         CoreWebView2Environment.CreateAsync(
             null,
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WPods", "WebView2"),
+            Path.Combine(AppIdentity.Profile, "WebView2"),
             new CoreWebView2EnvironmentOptions());
 
     /// <summary>Creates the controller in <paramref name="parent"/> and navigates to <paramref name="page"/> (e.g. "index.html").</summary>
@@ -81,7 +82,36 @@ internal sealed class WebPane : IDisposable
                 _onFailed(this, e.ProcessFailedKind);
             }
         };
+        if (ReduceMotion)
+        {
+            await ApplyMotionPreferenceAsync(core, true);
+            if (_disposed) return;
+        }
         core.Navigate($"https://{HostName}/{page}");
+    }
+
+    public bool ReduceMotion { get; private set; }
+
+    public void SetReducedMotion(bool reduce)
+    {
+        if (ReduceMotion == reduce) return;
+        ReduceMotion = reduce;
+        if (_controller is { } controller)
+            _ = ApplyMotionPreferenceAsync(controller.CoreWebView2, reduce);
+    }
+
+    private static async Task ApplyMotionPreferenceAsync(CoreWebView2 core, bool reduce)
+    {
+        // CSS, videos controlled by matchMedia, and JS animations all follow the same preference.
+        // An empty features list releases the override and restores the Windows preference.
+        string options = reduce
+            ? """{"features":[{"name":"prefers-reduced-motion","value":"reduce"}]}"""
+            : """{"features":[]}""";
+        try { await core.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", options); }
+        catch (Exception e) when (e is COMException or InvalidOperationException or ArgumentException)
+        {
+            Log.Warn("ui", $"Could not apply motion preference: {e.Message}");
+        }
     }
 
     public void Post(string json)

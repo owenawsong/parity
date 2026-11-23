@@ -1,0 +1,13 @@
+# Capture an AirPods session with an iPad and Windows
+
+Use this when you want to help verify what your AirPods send during Apple’s Acoustic Seal Test or a Custom Transparency adjustment. Keep the full diagnostic archive on your own devices. Pairside’s reader processes the Bluetooth trace locally and saves a filtered text report.
+
+1. On the iPad, open Apple’s [Profiles and Logs](https://developer.apple.com/feedback-assistant/profiles-and-logs/?name=Bluetooth). Under **Bluetooth for iOS/iPadOS**, open the instructions and install Apple’s logging profile. Apple may ask you to sign in. Follow its instructions for your iPad and restart if prompted.
+2. With logging active, connect your AirPods to the iPad. If they were already connected, disconnect and reconnect them in Settings so the trace includes channel setup.
+3. Perform the action you want to capture.
+   - **Acoustic seal.** Wear both earbuds. In Settings, select your AirPods Pro 3 and tap **Test Acoustic Seal**. Start the test when ready to hear its sound. Write down the approximate time and the result Apple displayed for each ear. Older AirPods Pro models call this **Ear Tip Fit Test**. [Apple’s fit-test guide](https://support.apple.com/en-ca/guide/airpods/dev5c4d302d7/web)
+   - **Custom Transparency.** If you use Headphone Accommodations, open **Settings → Accessibility → Audio & Visual → Headphone Accommodations**. Under **Transparency**, open **Customize Transparency**. Note the original value of one setting, adjust it slightly, then restore it. Write down which control changed and when. [Apple’s customization guide](https://support.apple.com/en-us/102663)
+4. Immediately trigger a **sysdiagnose** using the button combination in Apple’s logging instructions for your iPad. Give it several minutes. Open **Settings → Privacy & Security → Analytics & Improvements → Analytics Data**. Select the newest `sysdiagnose_…tar.gz` matching the time, then use **Share → Save to Files**. Transfer it to your PC using an external drive or your existing private file share. After collection, remove the Bluetooth logging profile in **Settings → General → VPN & Device Management**.
+5. On Windows, double-click **Inspect iPad capture.cmd** in Pairside’s tools folder, choose the archive, and save the filtered report. The tool also accepts an individual PacketLogger `.pklg` file. If you want to share findings, send only the resulting text report and the observations from step 3.
+
+A zero-match result can mean the archive omitted Bluetooth packet logs, missed the connection setup, or used a different exchange. The reader reports candidate seal messages and distinguishes Custom Transparency requests from device responses. The ear-by-ear result still comes from the iPad screen.

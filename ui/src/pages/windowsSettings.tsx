@@ -1,63 +1,55 @@
-import { Note } from '../components/common';
-import { createSegmented } from '../components/segmented';
-import { createSwitchRow, type SwitchRow } from '../components/switchRow';
-import { setChecked, setDisabled, setHidden, setText } from '../dom';
-import { post } from '../host';
+import { createDevicePreferences } from '../components/devicePreferences';
+import { createNearbyPreference } from '../components/layoutPreferences';
+import { NavRow } from '../components/common';
+import { createSwitchRow } from '../components/switchRow';
+import { setAttr, setChecked, setDisabled, setHidden, setText } from '../dom';
+import { isPairside, post } from '../host';
 import { t } from '../i18n';
-import { Icon, Spinner } from '../icons';
-import type { Theme } from '../protocol';
-import { current, live, store, updateText } from '../state';
-import { getTheme, getUseAccent, setThemePrefs } from '../theme';
+import { Art, Glyph, Icon } from '../icons';
+import { LegalFoot } from './legal';
+import { capsOf, current, live, store, updateText } from '../state';
+
 import type { Ctx, Page } from './page';
 
 export const createWindowsSettings = (ctx: Ctx): Page => {
-  const hostToggle =
-    (name: 'disableHandsFree' | 'lowLatency') =>
-    (value: boolean): void => {
+  let pendingCharge: { device: string; target: boolean; timer: number } | undefined;
+  const clearPendingCharge = () => {
+    if (pendingCharge) window.clearTimeout(pendingCharge.timer);
+    pendingCharge = undefined;
+  };
+  const charge = createSwitchRow({
+    id: 'optimizedChargingTitle', title: 'prefs.optimizedCharging', desc: 'prefs.optimizedChargingDesc', icon: 'battery',
+    onChange: value => {
       const d = current();
-      if (d) {
-        d.host[name] = value;
-        post({ type: 'setHostSetting', id: d.id, name, value });
-        ctx.update('windows');
-      }
-    };
-  let forDevice!: HTMLHeadingElement;
+      const state = d && live(d);
+      if (!d || !state?.ready || typeof state.optimizedCharging !== 'boolean') return;
+      clearPendingCharge();
+      pendingCharge = { device: d.id, target: value, timer: window.setTimeout(() => {
+        clearPendingCharge();
+        ctx.update('features');
+      }, 2000) };
+      post({ type: 'setOptimizedCharging', id: d.id, value });
+      ctx.update('features');
+    },
+  });
+  let deviceName!: HTMLHeadingElement;
+  let deviceModel!: HTMLParagraphElement;
+  let deviceArt!: HTMLSpanElement;
+  let modelArtKey = '';
+
   let langValue!: HTMLSpanElement;
   let toLanguage!: HTMLButtonElement;
-  let toMicModes!: HTMLButtonElement;
-  let toMixer!: HTMLButtonElement;
-  let toHotkeys!: HTMLButtonElement;
-  const handsFree = createSwitchRow({
-    id: 'hfpTitle',
-    title: 'windows.handsFree',
-    desc: 'windows.handsFreeDesc',
-    onChange: hostToggle('disableHandsFree'),
+  const nearby = createNearbyPreference();
+  const popupBatteries = createSwitchRow({
+    id: 'popupSeparateBatteriesTitle',
+    title: 'prefs.popupSeparateBatteries',
+    desc: 'prefs.popupSeparateBatteriesDesc',
+    icon: 'battery',
+    onChange: value => post({ type: 'setPopupSeparateBatteries', value }),
   });
-  // Windows takes a few seconds to apply a change, so a spinner takes the switch's place meanwhile.
-  const handsFreeSwitch = handsFree.row.lastElementChild as HTMLElement;
-  const handsFreeSpin = (
-    <span
-      class="wp-switch-spin"
-      role="img"
-      l:aria-label="common.checking"
-      hidden
-    >
-      <Spinner class="wp-spinner--sm" />
-    </span>
-  ) as HTMLSpanElement;
-  handsFree.row.append(handsFreeSpin);
-  const latency = createSwitchRow({
-    id: 'latencyTitle',
-    title: 'windows.latency',
-    desc: 'windows.latencyDesc',
-    stack: true,
-    onChange: hostToggle('lowLatency'),
-  });
-  const latencyNote = Note({ label: 'windows.latencyNote', warning: true });
-  latencyNote.hidden = true;
-  latency.row.append(latencyNote);
   const startup = createSwitchRow({
     id: 'startupTitle',
+    icon: 'power',
     title: 'windows.startup',
     desc: 'windows.startupDesc',
     onChange: (value) => {
@@ -65,17 +57,9 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
       post({ type: 'setStartup', value });
     },
   });
-  const accent = createSwitchRow({
-    id: 'accentTitle',
-    title: 'windows.accent',
-    desc: 'windows.accentDesc',
-    onChange: (value) => {
-      setThemePrefs({ useAccent: value });
-      post({ type: 'setAccent', value });
-    },
-  });
   const autoUpdate = createSwitchRow({
     id: 'autoUpdateTitle',
+    icon: 'download',
     title: 'update.auto',
     desc: 'update.autoDesc',
     onChange: (value) => {
@@ -86,110 +70,88 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
   let versionText!: HTMLSpanElement;
   let updateStatus!: HTMLSpanElement;
   let updateBtn!: HTMLButtonElement;
-  const theme = createSegmented<Theme>({
-    name: 'theme',
-    legend: 'windows.theme',
-    items: [
-      { value: 'light', label: 'windows.themeLight' },
-      { value: 'dark', label: 'windows.themeDark' },
-      { value: 'auto', label: 'windows.themeAuto' },
-    ],
-    onChange: (value) => {
-      setThemePrefs({ theme: value });
-      post({ type: 'setTheme', theme: value });
-    },
-  });
+  let updateGroup!: HTMLElement;
+  let aboutVersion!: HTMLSpanElement;
+  let aboutRow!: HTMLParagraphElement;
+  const appearance = NavRow({ icon: 'window', title: 'windows.appearance', desc: 'appearance.summary', onclick: () => ctx.go('appearance') });
+  const legal = LegalFoot(ctx);
+  const devicePreferences = createDevicePreferences(ctx, 'basic');
+  let resumeRow!: HTMLLabelElement;
+  let resumeSelect!: HTMLSelectElement;
+  const batteryHistory = NavRow({icon:'battery', title:'battery.history', onclick:()=>ctx.go('battery')});
+  setHidden(batteryHistory,!isPairside);
+  let basicOffline!: HTMLParagraphElement;
+  let deviceTools!: HTMLDetailsElement;
+  let deviceToolsToggle!: HTMLElement;
+  const advanced = NavRow({ icon: 'adjustments', title: 'overview.advanced', desc: 'settings.advancedSummary',
+    onclick: () => ctx.go('advanced') });
+  const addPair = NavRow({ icon: 'plus', title: 'pair.title', desc: 'menu.addPairHint', onclick: () => ctx.go('pair') });
 
+  const toCaseFinder = NavRow({ icon: 'locator', title: 'finder.title', onclick: () => ctx.go('caseFinder') });
   const el = (
-    <div class="wp-page">
-      <section class="wp-group">
-        <h2 class="wp-group__title" ref={forDevice} />
-        <div class="wp-list">
-          {handsFree.row}
-          {latency.row}
+    <div class="wp-page wp-preferences wp-app-settings">
+      <section class="wp-group wp-settings-device" aria-labelledby="deviceSettingsTitle">
+        <div class="wp-list wp-settings-rows">
+          <header class="wp-settings-identity">
+            <span class="wp-settings-product" aria-hidden="true" ref={deviceArt} />
+            <div><h2 id="deviceSettingsTitle" ref={deviceName} /><p ref={deviceModel} /></div>
+          </header>
+          <p class="wp-settings-device-note" l:text="prefs.airpodsOffline" ref={basicOffline} hidden />
+          {devicePreferences.rows}
+          <label class="wp-row wp-settings-dependent" ref={resumeRow} hidden>
+            <span class="wp-row__text"><span class="wp-row__title" id="ear-resume-title" l:text="features.earResume" /></span>
+            <select class="wp-choice" aria-labelledby="ear-resume-title" ref={resumeSelect} onchange={() => {
+              const device = current();
+              if (device) post({ type: 'setHostSetting', id: device.id, name: 'earResumeSeconds', value: Number(resumeSelect.value) });
+            }}>
+              <option value="15" l:text="features.earResumeShort" />
+              <option value="60" l:text="features.earResumeLong" />
+              <option value="0" l:text="features.earResumeManual" />
+            </select>
+          </label>
+          {charge.row}
         </div>
       </section>
-      <section class="wp-group">
-        <h2 class="wp-group__title" l:text="app.name" />
-        <div class="wp-list">
-          <button
-            type="button"
-            class="wp-row wp-row--nav"
-            ref={toMicModes}
-            onclick={() => {
-              ctx.go('micModes');
-            }}
-          >
-            <span class="wp-row__text">
-              <span class="wp-row__title" l:text="mic.modes" />
-              <span class="wp-row__desc" l:text="mic.modesDesc" />
-            </span>
-            <span class="wp-row__end">
-              <Icon name="chevron-right" />
-            </span>
-          </button>
-          <button
-            type="button"
-            class="wp-row wp-row--nav"
-            ref={toMixer}
-            onclick={() => {
-              ctx.go('mixer');
-            }}
-          >
-            <span class="wp-row__text">
-              <span class="wp-row__title" l:text="mixer.title" />
-              <span class="wp-row__desc" l:text="mixer.desc" />
-            </span>
-            <span class="wp-row__end">
-              <Icon name="chevron-right" />
-            </span>
-          </button>
-          <button
-            type="button"
-            class="wp-row wp-row--nav"
-            ref={toHotkeys}
-            onclick={() => {
-              ctx.go('hotkeys');
-            }}
-          >
-            <span class="wp-row__text">
-              <span class="wp-row__title" l:text="hotkeys.title" />
-              <span class="wp-row__desc" l:text="hotkeys.desc" />
-            </span>
-            <span class="wp-row__end">
-              <Icon name="chevron-right" />
-            </span>
+      <section class="wp-group" aria-labelledby="settingsConnectionTitle">
+        <h2 class="wp-group__title" id="settingsConnectionTitle" l:text="settings.connection" />
+        <div class="wp-list wp-settings-rows">
+          {nearby.row}
+          {isPairside && popupBatteries.row}
+          {addPair}
+        </div>
+      </section>
+      <section class="wp-group" aria-labelledby="generalTitle">
+        <h2 class="wp-group__title" id="generalTitle" l:text="settings.application" />
+        <div class="wp-list wp-settings-rows">
+          {appearance}
+          <button type="button" class="wp-row wp-row--nav wp-settings-language" ref={toLanguage} onclick={() => ctx.go('language')}>
+            <span class="wp-row__lead"><Icon name="globe" /></span>
+            <span class="wp-row__text"><span class="wp-row__title" l:text="lang.title" /></span>
+            <span class="wp-row__end"><span ref={langValue} /><Icon name="chevron-right" /></span>
           </button>
           {startup.row}
-          <div class="wp-row wp-row--stack">
-            <div class="wp-row__head">
-              <div class="wp-row__text">
-                <span class="wp-row__title" l:text="windows.theme" />
-                <span class="wp-row__desc" l:text="windows.themeDesc" />
-              </div>
-            </div>
-            {theme.el}
-          </div>
-          <button
-            type="button"
-            class="wp-row wp-row--nav"
-            ref={toLanguage}
-            onclick={() => {
-              ctx.go('language');
-            }}
-          >
-            <span class="wp-row__text">
-              <span class="wp-row__title" l:text="lang.title" />
-            </span>
-            <span class="wp-row__end">
-              <span class="wp-row__value" ref={langValue} />
-              <Icon name="chevron-right" />
-            </span>
-          </button>
-          {accent.row}
         </div>
       </section>
-      <section class="wp-group">
+      <section class="wp-group" aria-labelledby="settingsToolsTitle">
+        <h2 class="wp-group__title" id="settingsToolsTitle" l:text="settings.more" />
+        <div class="wp-list wp-settings-rows wp-settings-tools">
+          <details class="wp-tool-details wp-device-tools" ref={deviceTools}>
+            <summary ref={deviceToolsToggle}>
+              <span class="wp-row__lead"><Glyph name="pair" /></span>
+              <span class="wp-row__text">
+                <span class="wp-row__title" l:text="settings.deviceTools" />
+              </span>
+              <Icon name="chevron-down" />
+            </summary>
+            <div class="wp-tool-details__body">
+              {batteryHistory}
+              {toCaseFinder}
+            </div>
+          </details>
+          {advanced}
+        </div>
+      </section>
+      <section class="wp-group" ref={updateGroup}>
         <h2 class="wp-group__title" l:text="update.title" />
         <div class="wp-list">
           <div class="wp-row">
@@ -213,35 +175,76 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
           {autoUpdate.row}
         </div>
       </section>
+      <footer class="wp-settings-footer">
+        <p ref={aboutRow} hidden><span l:text="app.name" /> · <span ref={aboutVersion} /></p>
+        {legal.el}
+      </footer>
     </div>
   ) as HTMLDivElement;
 
-  const renderHost = (row: SwitchRow, on: boolean, locked: boolean): void => {
-    setChecked(row.input, on);
-    setDisabled(row.input, locked);
+  const renderDeviceHeading = (d: NonNullable<ReturnType<typeof current>>): void => {
+    setText(deviceName, d.name);
+    setText(deviceModel, d.model);
+    setHidden(deviceModel, !d.model || d.name === d.model);
+    const key = d.model + '/' + d.art;
+    if (modelArtKey === key) return;
+    modelArtKey = key;
+    const poster = (d.model === 'AirPods Pro 3' && PRO3_HOME_ART?.right) || AIRPODS_HOME_POSTERS?.[d.model];
+    if (poster) {
+      const image = document.createElement('img');
+      image.src = poster;
+      image.alt = '';
+      deviceArt.replaceChildren(image);
+    } else {
+      deviceArt.replaceChildren(Art({ model: d.art, class: 'wp-settings-product-glyph' }));
+    }
   };
+
   const render = (): void => {
+    setChecked(popupBatteries.input, store.popupSeparateBatteries);
     const d = current();
     if (!d) {
       return;
     }
-    const locked = !live(d);
-    setText(forDevice, t('windows.forDevice', { name: d.name }));
-    renderHost(handsFree, d.host.disableHandsFree, locked);
-    const applying = store.handsFreeApplying.has(d.id);
-    setHidden(handsFreeSwitch, applying);
-    setHidden(handsFreeSpin, !applying);
-    renderHost(latency, d.host.lowLatency, locked);
-    setHidden(latencyNote, !d.host.lowLatency);
+    renderDeviceHeading(d);
+    resumeSelect.value = String(d.host.earResumeSeconds ?? 15);
+    nearby.render();
     setChecked(startup.input, store.startup);
-    theme.set(getTheme());
-    setChecked(accent.input, getUseAccent());
     const lang = store.languageByCode.get(store.language);
     setText(langValue, lang ? lang.originalName : t('lang.sameAsWindows'));
   };
 
+  const renderDeviceTools = () => {
+    const d = current();
+    if (!d) return;
+    const caps = capsOf(d);
+    const st = live(d);
+    const pods = st ?? d.saved;
+    const hasCharge = typeof st?.optimizedCharging === 'boolean';
+    if (pendingCharge && (!hasCharge || d.id !== pendingCharge.device || pendingCharge.target === st?.optimizedCharging))
+      clearPendingCharge();
+    setHidden(charge.row, !hasCharge);
+    setDisabled(charge.input, !st?.ready || !!pendingCharge);
+    setChecked(charge.input, pendingCharge?.target ?? (st?.optimizedCharging === true));
+    setAttr(charge.row, 'aria-busy', pendingCharge ? 'true' : null);
+    const finder = d.model === 'AirPods Pro 3' && d.hasKeys;
+    setHidden(toCaseFinder, !finder);
+    devicePreferences.render();
+    setHidden(resumeRow, !isPairside || !caps.has('earDetection'));
+    resumeSelect.disabled = pods.earDetection === false;
+    const hasBasics = devicePreferences.features.some(f => caps.has(f.def.key));
+    setHidden(basicOffline, !!st?.ready || !hasBasics);
+  };
+
   const renderUpdate = (): void => {
     const u = store.update;
+    const external = u.managedExternally === true;
+    setHidden(updateGroup, external);
+    setHidden(aboutRow, !external);
+    if (external) {
+      setText(aboutVersion, t('windows.version', { version: u.version }));
+      return;
+    }
     const busy =
       u.status === 'checking' ||
       u.status === 'downloading' ||
@@ -261,16 +264,21 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
 
   return {
     el,
-    sections: { windows: render, update: renderUpdate },
-    returnFocus: (from) =>
-      from === 'language'
-        ? toLanguage
-        : from === 'micModes'
-          ? toMicModes
-          : from === 'mixer'
-            ? toMixer
-            : from === 'hotkeys'
-              ? toHotkeys
-              : null,
+    anchors: { appearance, nearby: nearby.row, popupBatteries: popupBatteries.row, startup: startup.row, advanced, earResume: resumeRow, deviceTools,
+      optimizedCharging: charge.row, ...devicePreferences.anchors },
+    sections: { windows: render, features: renderDeviceTools, hero: renderDeviceTools, update: renderUpdate },
+    returnFocus: from => {
+      if (from === 'battery' || from === 'caseFinder') {
+        if (!deviceTools.open) return deviceToolsToggle;
+        if (from === 'battery') return batteryHistory;
+        return toCaseFinder;
+      }
+      if (from === 'appearance') return appearance;
+      if (from === 'advanced') return advanced;
+      if (from === 'pair') return addPair;
+      if (from === 'legal') return legal.link;
+      if (from === 'language') return toLanguage;
+      return null;
+    },
   };
 };

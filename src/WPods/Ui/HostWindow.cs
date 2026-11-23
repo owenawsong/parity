@@ -14,6 +14,9 @@ internal sealed class HostWindow : NativeWindow, IDisposable
 
     private const uint VkA = 0x41;
     private const int SpiSetWorkArea = 0x002F;
+    private const int WmPowerBroadcast = 0x0218;
+    private const int PbtApmResumeAutomatic = 0x0012;
+    public event Action? SystemResumed;
 
     private readonly Action _colorsChanged;
     private readonly Action _displayChanged;
@@ -25,7 +28,7 @@ internal sealed class HostWindow : NativeWindow, IDisposable
         _colorsChanged = colorsChanged;
         _displayChanged = displayChanged;
         _hotKey = hotKey;
-        CreateHandle(new CreateParams { Caption = "WPods", Style = NativeUi.WsPopup, ExStyle = NativeUi.WsExToolWindow });
+        CreateHandle(new CreateParams { Caption = Core.AppIdentity.Name, Style = NativeUi.WsPopup, ExStyle = NativeUi.WsExToolWindow });
     }
 
     /// <summary>Registers or unregisters Win+Shift+A; a shortcut already taken by another app is skipped silently.</summary>
@@ -78,6 +81,9 @@ internal sealed class HostWindow : NativeWindow, IDisposable
     {
         switch (m.Msg)
         {
+            case WmPowerBroadcast when m.WParam == PbtApmResumeAutomatic:
+                SystemResumed?.Invoke();
+                break;
             case NativeUi.WmSettingChange when m.WParam == SpiSetWorkArea:
             case NativeUi.WmDisplayChange:
             case NativeUi.WmDpiChanged:

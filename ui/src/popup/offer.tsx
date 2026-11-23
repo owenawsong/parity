@@ -1,44 +1,84 @@
-import { createBatteries } from '../components/batteryRing';
-import { setAttr, setClass, setText } from '../dom';
+import { setAttr, setHidden, setText } from '../dom';
 import { t } from '../i18n';
-import { Art, Spinner } from '../icons';
+import { Art, Icon } from '../icons';
 import type { Offer } from '../protocol';
+import { createPopupBatteries } from './batteries';
+import { createPopupMotion } from './modelMotion';
 
 type OfferView = {
   el: HTMLDivElement;
   connect: HTMLButtonElement;
-  render: (offer: Offer, busy: boolean) => void;
+  secondary: HTMLButtonElement;
+  render: (offer: Offer, visible: boolean, separateBatteries: boolean) => void;
+  stopMotion: () => void;
 };
+
+const SECONDARY_COPY = {
+  offer: 'popup.notNow',
+  connecting: 'popup.cancel',
+  autoConnecting: 'popup.close',
+  connected: 'popup.close',
+  failed: 'popup.notNow',
+} as const;
 
 export const createOfferView = (o: {
   onConnect: () => void;
   onSecondary: () => void;
 }): OfferView => {
-  let name!: HTMLParagraphElement;
+  let name!: HTMLHeadingElement;
+  let actionStatus!: HTMLParagraphElement;
+  let subtitle!: HTMLSpanElement;
+  let success!: HTMLSpanElement;
+  let failure!: HTMLDivElement;
   let connect!: HTMLButtonElement;
-  let connectLabel!: HTMLSpanElement;
   let secondary!: HTMLButtonElement;
-  let art = Art({ model: 'pro', class: 'wp-popup__art' });
+  let art: Element = Art({ model: 'pro', class: 'wp-popup__art', forPopup: true });
   let artModel = 'pro';
-  const batteries = createBatteries(true);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let previousState: Offer['state'] | null = null;
+  let previousDevice: Offer['id'] | null = null;
+  let incoming: Animation | undefined;
+  let outgoing: HTMLElement | undefined;
+  const clearActionMotion = () => {
+    incoming?.cancel();
+    incoming = undefined;
+    outgoing?.remove();
+    outgoing = undefined;
+  };
+  reducedMotion.addEventListener('change', () => {
+    if (reducedMotion.matches) {
+      clearActionMotion();
+    }
+  });
+  const motion = createPopupMotion();
+  const batteries = createPopupBatteries();
   const el = (
-    <div class="wp-popup__view">
-      {art}
-      <div class="wp-popup__id">
-        <p class="wp-popup__name" ref={name} />
-        <p class="wp-popup__sub" l:text="status.elsewhere" />
+    <div class="wp-popup__view wp-popup__offer">
+      <div class="wp-popup__id wp-popup__offer-id">
+        <h2 class="wp-popup__name" ref={name} />
       </div>
-      {batteries.el}
-      <div class="wp-popup__actions">
+      <div class="wp-popup__device">
+        <div class="wp-popup__artwork">
+          {art}
+        </div>
+        <div class="wp-popup__reading-slot">{batteries.el}</div>
+      </div>
+      <div class="wp-popup__retry-note" hidden ref={failure} role="status">
+        <Icon name="warning" />
+        <div><p class="wp-popup__failure-title" l:text="popup.failedTitle" />
+          <p class="wp-popup__sub" l:text="popup.failedBody" /></div>
+      </div>
+      <div class="wp-popup__actions wp-popup__actions--offer">
+        <p class="wp-popup__action-status" role="status" hidden ref={actionStatus}>
+          <span class="wp-popup__done" aria-hidden="true" hidden ref={success}><Icon name="check" /></span>
+          <span ref={subtitle} />
+        </p>
         <button
           type="button"
           class="wp-btn wp-btn--primary wp-btn--lg wp-btn--block"
           ref={connect}
           onclick={o.onConnect}
-        >
-          <Spinner class="wp-spinner--sm" />
-          <span ref={connectLabel} />
-        </button>
+        />
         <button
           type="button"
           class="wp-btn wp-btn--subtle wp-btn--block"
@@ -52,24 +92,76 @@ export const createOfferView = (o: {
   return {
     el,
     connect,
-    render: (offer, busy) => {
-      if (offer.art !== artModel) {
-        artModel = offer.art;
-        const next = Art({ model: offer.art, class: 'wp-popup__art' });
+    secondary,
+    stopMotion: () => {
+      motion?.show(null);
+      clearActionMotion();
+      previousState = null;
+      previousDevice = null;
+    },
+    render: (offer, visible, separateBatteries) => {
+      const { state } = offer;
+      const failed = state === 'failed';
+      const changing = state !== previousState || offer.id !== previousDevice;
+      const animate = changing && visible && !reducedMotion.matches && offer.id === previousDevice;
+      if (changing) clearActionMotion();
+      const showConnect = state === 'offer' || failed;
+      const connecting = state === 'connecting' || state === 'autoConnecting';
+      if (animate) {
+        outgoing = (connect.hidden ? actionStatus : connect).cloneNode(true) as HTMLElement;
+        outgoing.inert = true;
+        outgoing.setAttribute('aria-hidden', 'true');
+        outgoing.classList.add('wp-popup__action-ghost');
+      }
+      const model = motion?.forModel(offer.model) ?? null;
+      const rotating = model ? motion : null;
+      const nextModel = rotating ? 'motion' : offer.art;
+      if (nextModel !== artModel) {
+        artModel = nextModel;
+        const next = rotating?.el ?? Art({ model: offer.art, class: 'wp-popup__art', forPopup: true });
         art.replaceWith(next);
         art = next;
       }
-      setAttr(art, 'aria-label', t(`art.${offer.art}`));
-      setText(name, offer.name);
-      batteries.update(
-        offer.batteries,
-        { left: '', right: '' },
-        offer.art === 'pro' ? 'case-pro' : 'case',
-      );
-      setClass(connect, 'is-loading', busy);
-      setAttr(connect, 'aria-disabled', busy ? 'true' : null);
-      setText(connectLabel, t(busy ? 'popup.connecting' : 'popup.connect'));
-      setText(secondary, t(busy ? 'popup.cancel' : 'popup.notNow'));
+      if (!rotating) setAttr(art, 'aria-label', t(`art.${offer.art}`));
+      const pro3 = offer.model === 'AirPods Pro 3';
+      motion?.show(rotating ? offer.id : null, model, offer.batteries.case?.charging === true, visible, state === 'offer' || connecting);
+      setAttr(el, 'data-state', state);
+      setAttr(art, 'aria-hidden', rotating ? 'true' : null);
+      setHidden(failure, !failed);
+      setHidden(success, state !== 'connected');
+      setHidden(actionStatus, showConnect);
+      const modelLabel = offer.model?.trim() ?? '';
+      const deviceName = offer.name.trim() || modelLabel || t('home.yourAirPods');
+      setText(name, deviceName);
+      const focus = document.hasFocus() ? document.activeElement : null;
+      batteries.update(offer.batteries, separateBatteries, !!rotating && pro3);
+      const caption = connecting ? t('popup.connecting') : state === 'connected' ? t('popup.connected') : '';
+      setText(subtitle, caption);
+      const wasConnecting = !connect.hidden && !showConnect && focus === connect;
+      const retryFocused = failed && connect.hidden && focus === secondary;
+      setHidden(connect, !showConnect);
+      setText(connect, t(failed ? 'popup.tryAgain' : 'popup.connect'));
+      setText(secondary, t(SECONDARY_COPY[state]));
+      if (outgoing && !outgoing.isConnected) {
+        const ghost = outgoing;
+        connect.parentElement?.append(ghost);
+        ghost.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(-3px)' }], {
+          duration: 125, easing: 'ease-out',
+        }).onfinish = () => {
+          ghost.remove();
+          if (outgoing === ghost) outgoing = undefined;
+        };
+        incoming = (showConnect ? connect : actionStatus).animate([
+          { opacity: 0, transform: 'translateY(5px)' },
+          { opacity: 1, transform: 'none' },
+        ], { duration: 210, delay: 35, fill: 'backwards', easing: 'cubic-bezier(.22,.8,.24,1)' });
+      }
+      if (changing) {
+        previousState = state;
+        previousDevice = offer.id;
+      }
+      if (wasConnecting) secondary.focus();
+      if (retryFocused) connect.focus();
     },
   };
 };

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Audio/AudioEndpoints.cs" Link="AudioEndpoints.cs" />
+    <Compile Include="../../../src/WPods/Audio/MicCheck.cs" Link="MicCheck.cs" />
+  </ItemGroup>
+</Project>

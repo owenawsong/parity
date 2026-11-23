@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AirPods Motion · Parity</title>
+  <link rel="stylesheet" href="flow.css">
+  <script type="module" src="flow.js"></script>
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="flow.html">Parity</a>
+    <nav aria-label="Motion previews">
+      <a href="flow.html" aria-current="page">Connection flow</a>
+      <a href="index.html#library">Clip library</a>
+    </nav>
+    <button id="theme" class="quiet" type="button">Light background</button>
+  </header>
+  <main class="wrap">
+    <div class="heading">
+      <div>
+        <h1>AirPods motion</h1>
+        <p>AirPods Pro 3 · Simulated connection</p>
+      </div>
+      <button id="replay" class="primary" type="button">Play full flow</button>
+    </div>
+    <div class="workbench">
+      <div id="stage" class="stage" data-step="idle" aria-label="AirPods animation preview">
+        <div class="hero">
+          <div class="identity">
+            <h2 id="device-name" hidden>AirPods Pro</h2>
+            <p id="status" role="status"><span id="state-label">Disconnected</span></p>
+            <p id="idle-hint">Open your case near this PC.</p>
+          </div>
+          <div id="home-batteries" class="battery-rack" aria-label="Device batteries" hidden></div>
+          <video id="transition" class="transition" preload="auto" muted playsinline hidden></video>
+        </div>
+        <aside id="notification" class="notification" aria-label="Nearby popup" hidden>
+          <div class="popup-heading">
+            <h2>AirPods Pro</h2><p>Nearby</p>
+          </div>
+          <div id="popup-grouped" class="popup-grouped">
+            <video id="rotation" muted playsinline preload="metadata" poster="media/loop-charged.webp" aria-label="AirPods and case rotation"></video>
+            <div class="readings" role="group" aria-label="Battery levels">
+              <div class="reading reading--pair"><span class="reading__label">AirPods</span><span id="popup-pair" class="reading__value"></span></div>
+              <div class="reading reading--case"><span class="reading__label">Case</span><span id="popup-case" class="reading__value"></span></div>
+            </div>
+          </div>
+          <div id="popup-individual" class="battery-rack" aria-label="Device batteries" hidden></div>
+          <button id="connect" class="primary" type="button">Connect</button>
+          <button id="dismiss" class="dismiss" type="button">Not now</button>
+        </aside>
+      </div>
+      <aside class="controls" aria-label="Preview controls">
+        <div class="tabs" aria-label="Preview surface">
+          <button id="flow-tab" type="button" aria-pressed="true">Connection</button>
+          <button id="case-tab" type="button" aria-pressed="false">In-app view</button>
+        </div>
+        <div id="flow-controls" class="pane">
+          <div class="steps" role="group" aria-label="Connection state">
+            <button type="button" data-step="idle" aria-pressed="true"><span>Disconnected</span><small>Text only</small></button>
+            <button type="button" data-step="nearby" aria-pressed="false"><span>Discovered nearby</span><small>One rotation on arrival</small></button>
+            <button type="button" data-step="connecting" aria-pressed="false"><span>Connecting</span><small>Play the selected cut</small></button>
+            <button type="button" data-step="connected" aria-pressed="false"><span>Connected</span><small>Static artwork and batteries</small></button>
+          </div>
+          <label class="field" for="clip">Transition clip
+            <select id="clip">
+              <option value="lift-out-fade">Lift out and fade</option>
+              <option value="fade">Quick fade</option>
+              <option value="reveal">Quick lid reveal</option>
+              <option value="pairing-lift-test">Reveal into lift-out</option>
+              <option value="connect-loop">Open-case rotation</option>
+            </select>
+          </label>
+          <label class="field" for="popup-layout">Popup batteries
+            <select id="popup-layout">
+              <option value="grouped">Grouped · rotating</option>
+              <option value="individual">Individual · still</option>
+            </select>
+          </label>
+          <label class="checkbox"><input id="charging" type="checkbox"> Popup case charging</label>
+        </div>
+        <div id="case-controls" class="pane" hidden>
+          <label class="field" for="bud-charging">Earbuds charging
+            <select id="bud-charging"><option value="0">Neither</option><option value="1">Left only</option><option value="2">Right only</option><option value="3">Both</option></select>
+          </label>
+          <label class="checkbox"><input id="home-charging" type="checkbox"> Case charging</label>
+        </div>
+      </aside>
+    </div>
+    <footer>
+      <a href="preview/Latchwave%20Popup.html">Try other AirPods models in the popup</a>
+      <a href="index.html#library">Browse all source clips</a>
+    </footer>
+  </main>
+  <template id="battery-tile">
+    <figure class="battery-tile">
+      <img alt="">
+      <figcaption>
+        <span class="gauge" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M9.2 1 3.4 9h4.1l-.9 6 5.9-8.1H8.4Z"/></svg></span>
+        <span class="tile-reading" aria-hidden="true"><strong></strong><span class="tile-label"></span></span>
+      </figcaption>
+    </figure>
+  </template>
+</body>
+</html>

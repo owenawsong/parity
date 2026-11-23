@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <DefineConstants>PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Audio/SpatialStereo.cs" />
+    <Compile Include="../../../src/WPods/Audio/StereoLevelMatch.cs" />
+    <EmbeddedResource Include="../../../src/WPods/Audio/kemar48.bin" LogicalName="Pairside.Kemar48" />
+  </ItemGroup>
+</Project>

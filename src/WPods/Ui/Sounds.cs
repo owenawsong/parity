@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using WPods.Core;
+using static WPods.Audio.AudioEndpoints;
 
 namespace WPods.Ui;
 
@@ -22,8 +23,6 @@ internal static class Sounds
     private const float Peak = 0.25f;
     // An idle Bluetooth output needs a moment to wake, which would swallow the start of the sound.
     private const int WakeLeadMs = 300;
-    private const int ERender = 0;
-    private const int EMultimedia = 1;
     private const int ClsCtxAll = 0x17;
     private const int SharedMode = 0;
     private const short FormatFloat = 3;
@@ -60,7 +59,7 @@ internal static class Sounds
         IAudioClient? client = null;
         try
         {
-            var enumerator = (IMMDeviceEnumerator)(object)new MMDeviceEnumerator();
+            var enumerator = CreateEnumerator();
             Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(ERender, EMultimedia, out IMMDevice device));
             bool silent = IsSilent(device);
             Guid iid = typeof(IAudioClient).GUID;
@@ -281,39 +280,6 @@ internal static class Sounds
 
     private sealed record Rendering(int Rate, float[] Samples);
 
-    [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-    private sealed class MMDeviceEnumerator;
-
-    [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IMMDeviceEnumerator
-    {
-        [PreserveSig] int EnumAudioEndpoints(int flow, int mask, out nint devices);
-        [PreserveSig] int GetDefaultAudioEndpoint(int flow, int role, out IMMDevice device);
-    }
-
-    [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IMMDevice
-    {
-        [PreserveSig] int Activate(ref Guid iid, int context, nint parameters, [MarshalAs(UnmanagedType.IUnknown)] out object instance);
-    }
-
-    [ComImport, Guid("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IAudioClient
-    {
-        [PreserveSig] int Initialize(int shareMode, int flags, long bufferDuration, long periodicity, nint format, nint session);
-        [PreserveSig] int GetBufferSize(out int frames);
-        [PreserveSig] int GetStreamLatency(out long latency);
-        [PreserveSig] int GetCurrentPadding(out int frames);
-        [PreserveSig] int IsFormatSupported(int shareMode, nint format, out nint closest);
-        [PreserveSig] int GetMixFormat(out nint format);
-        [PreserveSig] int GetDevicePeriod(out long defaultPeriod, out long minimumPeriod);
-        [PreserveSig] int Start();
-        [PreserveSig] int Stop();
-        [PreserveSig] int Reset();
-        [PreserveSig] int SetEventHandle(nint handle);
-        [PreserveSig] int GetService(ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object service);
-    }
-
     [ComImport, Guid("F294ACFC-3146-4483-A7BF-ADDCA7C260E2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAudioRenderClient
     {
@@ -321,9 +287,4 @@ internal static class Sounds
         [PreserveSig] int ReleaseBuffer(int frames, int flags);
     }
 
-    [ComImport, Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IAudioMeterInformation
-    {
-        [PreserveSig] int GetPeakValue(out float peak);
-    }
 }

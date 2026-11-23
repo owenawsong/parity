@@ -65,7 +65,13 @@ public sealed class AapSession : IAsyncDisposable
     private PodSettings _savedPodSettings;
     // True while WatchListeningModesAsync runs; guarded by _stateLock.
     private bool _watchingModes;
+    // A brief pause for the latest report lets the main page collapse rapid clicks before they reach the pods.
+    private const int ListeningModeDispatchWaitMs = 1100;
+    private TaskCompletionSource? _listeningModeSettled;
+    private long _nextListeningModeDispatch;
     private bool _callAudio;
+    private (OnboardEq Eq, TaskCompletionSource Reply)? _customEqWrite;
+    private readonly TaskCompletionSource<OnboardEq> _customEqReport = new(TaskCreationOptions.RunContinuationsAsynchronously);
     // Settings writes run on the save task, never on the read loop (which also carries mic audio) or under _stateLock.
     // One pending save per kind, so a burst is one write and the last value wins. Guarded by _saveLock.
     private readonly Lock _saveLock = new();
@@ -103,6 +109,9 @@ public sealed class AapSession : IAsyncDisposable
     }
 
     public ulong Address { get; }
+    // Motion subscriptions differ across pairs. Remember only a service that
+    // delivered valid reports on this connection. Pose is never cached here.
+    internal byte? VerifiedMotionService { get; set; }
 
     public DeviceState State { get; }
 
@@ -111,6 +120,7 @@ public sealed class AapSession : IAsyncDisposable
 
     /// <summary>At most one per inbound packet or command; never raised when nothing changed.</summary>
     public event Action<DeviceChange>? Changed;
+    internal event Action<long, byte>? HeartRateSample;
 
     /// <summary>Call audio (Hands-Free) starts being set up on this link (true) or ends; raised on the read loop.</summary>
     public event Action<bool>? CallAudioChanged;
@@ -127,7 +137,8 @@ public sealed class AapSession : IAsyncDisposable
     internal void CarryOver(AapSession previous)
     {
         State.CarryOver(previous.State);
-        _resumeHeartRate = previous.State.HeartRate != HeartRateStatus.Off;
+        // A Pairside recording ends with its session. Starting a new one takes an explicit action.
+        _resumeHeartRate = !AppIdentity.IsPairside && previous.State.HeartRate != HeartRateStatus.Off;
     }
 
     internal void Start()
@@ -140,6 +151,18 @@ public sealed class AapSession : IAsyncDisposable
     public async ValueTask<bool> WriteAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
     {
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await WriteLockedAsync(packet, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    private async ValueTask<bool> WriteLockedAsync(ReadOnlyMemory<byte> packet, CancellationToken ct)
+    {
         try
         {
             if (_life.IsCancellationRequested)
@@ -163,56 +186,81 @@ public sealed class AapSession : IAsyncDisposable
             Log.Warn("aap", $"write failed: 0x{e.HResult:X8} {e.Message}");
             return false;
         }
-        finally
+    }
+
+    /// <summary>Waits briefly for the previous mode's report before the page sends its next selection.</summary>
+    internal async Task WaitForListeningModeDispatchAsync()
+    {
+        Task? settled;
+        long remaining;
+        lock (_stateLock)
         {
-            _writeGate.Release();
+            settled = _listeningModeSettled?.Task;
+            remaining = _nextListeningModeDispatch - Environment.TickCount64;
+        }
+        if (settled is null || remaining <= 0)
+        {
+            return;
+        }
+        try
+        {
+            await settled.WaitAsync(TimeSpan.FromMilliseconds(remaining), _life.Token).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The next mode can go out even if the previous one never reports.
+        }
+        catch (OperationCanceledException) when (_life.IsCancellationRequested)
+        {
+            // The page checks that the session is still current before dispatching.
         }
     }
 
-    /// <summary>The newest request stays shown until reported back, so echoes of earlier requests cause no flicker.</summary>
+    /// <summary>The newest dispatched request stays shown while the device reports its mode.</summary>
     public async ValueTask<bool> SetListeningModeAsync(ListeningMode mode, CancellationToken ct = default)
     {
         if (!Enum.IsDefined(mode))
         {
             throw new ArgumentOutOfRangeException(nameof(mode));
         }
-        int id;
-        lock (_stateLock)
-        {
-            id = State.PushListeningMode((byte)mode);
-            if (!_watchingModes)
-            {
-                _watchingModes = true;
-                _ = WatchListeningModesAsync();
-            }
-        }
-        Log.Info("aap", $"listening mode {mode} requested");
-        byte[] packet = Aap.Setting(Aap.ListeningModeId, (byte)mode);
-        bool written;
+        await _writeGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            written = await WriteAsync(packet, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            DropListeningMode(id);
-            throw;
-        }
-        if (!written)
-        {
-            DropListeningMode(id);
-            return false;
-        }
-        lock (_stateLock)
-        {
-            // Optimistic update, unless a newer request was made meanwhile.
-            if (State.IsNewestListeningMode(id) && Aap.ApplySetting(packet, State) is var change && change != DeviceChange.None)
+            if (_life.IsCancellationRequested) return false;
+            ct.ThrowIfCancellationRequested();
+            int id;
+            lock (_stateLock)
             {
-                Changed?.Invoke(change);
-                SavePodSettings(change);
+                if (!State.SupportsListeningMode(mode)) return false;
+                // One matching report settles an already-dispatched selection.
+                if (State.ListeningMode == mode) return true;
+                long now = Environment.TickCount64;
+                id = State.PushListeningMode((byte)mode, now);
+                _listeningModeSettled ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _nextListeningModeDispatch = now + ListeningModeDispatchWaitMs;
+                if (!_watchingModes)
+                {
+                    _watchingModes = true;
+                    _ = WatchListeningModesAsync();
+                }
+                Changed?.Invoke(DeviceChange.ListeningMode);
+            }
+            bool written = false;
+            try
+            {
+                Log.Info("aap", $"listening mode {mode} requested");
+                written = await WriteLockedAsync(Aap.Setting(Aap.ListeningModeId, (byte)mode), ct).ConfigureAwait(false);
+                return written;
+            }
+            finally
+            {
+                if (!written) DropListeningMode(id);
             }
         }
-        return true;
+        finally
+        {
+            _writeGate.Release();
+        }
     }
 
     /// <summary>Writes 0x0A; once written it is stored and written again on every attach.</summary>
@@ -231,6 +279,33 @@ public sealed class AapSession : IAsyncDisposable
 
     public ValueTask<bool> SetPersonalizedVolumeAsync(bool on, CancellationToken ct = default) =>
         SendSettingAsync(Aap.Setting(Aap.PersonalizedVolumeId, Aap.Bool(on)), ct);
+
+    internal ValueTask<bool> EnableSleepDetectionAsync(CancellationToken ct) =>
+        WriteAsync(Aap.Setting(Aap.SleepDetectionId, 1), ct);
+
+    internal Task<OnboardEq> ReadCustomEqAsync(CancellationToken ct) => _customEqReport.Task.WaitAsync(ct);
+
+    internal ValueTask<bool> PreviewCustomEqAsync(OnboardEq eq, CancellationToken ct) =>
+        State.CustomEq is null ? ValueTask.FromResult(false) : WriteAsync(Aap.CustomEqPacket(eq), ct);
+
+    internal async ValueTask<(bool Sent, bool Confirmed)> SetCustomEqAsync(OnboardEq eq, CancellationToken ct)
+    {
+        TaskCompletionSource reply = NewSignal();
+        lock (_stateLock)
+        {
+            if (_customEqWrite.HasValue || State.CustomEq is null) return (false, false);
+            _customEqWrite = (eq, reply);
+        }
+        try
+        {
+            if (!await WriteAsync(Aap.CustomEqPacket(eq), ct).ConfigureAwait(false)) return (false, false);
+            return (true, await WaitAsync(reply.Task, TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false));
+        }
+        finally
+        {
+            lock (_stateLock) _customEqWrite = null;
+        }
+    }
 
     public ValueTask<bool> SetOneBudAncAsync(bool on, CancellationToken ct = default) =>
         SendSettingAsync(Aap.Setting(Aap.OneBudAncId, Aap.Bool(on)), ct);
@@ -270,6 +345,50 @@ public sealed class AapSession : IAsyncDisposable
         }
         SaveMicSide(side);
         return true;
+    }
+
+    private readonly SemaphoreSlim _confirmedSettingGate = new(1, 1);
+
+    internal ValueTask<bool> SetCallMutePressesAsync(byte presses, CancellationToken ct) =>
+        presses is 1 or 2 ? WriteReportedSettingAsync(CallGesture.Configure(presses), () => State.CallMutePresses, presses, ct)
+                          : ValueTask.FromResult(false);
+
+    internal ValueTask<bool> SetOptimizedChargingAsync(bool enabled, CancellationToken ct) =>
+        WriteReportedSettingAsync(Aap.Setting(Aap.OptimizedChargingId, Aap.Bool(enabled)),
+            () => State.OptimizedCharging is bool on ? Aap.Bool(on) : null, Aap.Bool(enabled), ct);
+
+    // These settings are writable only after this session receives a recognized report.
+    // A completed transport write is insufficient: wait for the matching reply from the buds.
+    private async ValueTask<bool> WriteReportedSettingAsync(byte[] packet, Func<byte?> current, byte target, CancellationToken ct)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, _life.Token);
+        await _confirmedSettingGate.WaitAsync(lifetime.Token).ConfigureAwait(false);
+        var report = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Observe(ReadOnlySpan<byte> received)
+        {
+            if (received.SequenceEqual(packet)) report.TrySetResult();
+        }
+        try
+        {
+            lock (_stateLock)
+            {
+                if (State.Status != SessionStatus.Ready || current() is not byte value) return false;
+                if (value == target) return true;
+            }
+            PacketReceived += Observe;
+            if (!await WriteAsync(packet, lifetime.Token).ConfigureAwait(false)) return false;
+            await report.Task.WaitAsync(TimeSpan.FromMilliseconds(1400), lifetime.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        finally
+        {
+            PacketReceived -= Observe;
+            _confirmedSettingGate.Release();
+        }
     }
 
     public ValueTask<bool> SetPressSpeedAsync(PressSpeed speed, CancellationToken ct = default)
@@ -336,6 +455,41 @@ public sealed class AapSession : IAsyncDisposable
     {
         ArgumentOutOfRangeException.ThrowIfGreaterThan(volume, (byte)100);
         return SendSettingAsync(Aap.ToneVolume(volume), ct);
+    }
+
+    private (byte Strength, TaskCompletionSource Reply)? _adaptiveWrite;
+    private readonly TaskCompletionSource _initialSettings = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal Task WaitForInitialSettingsAsync(CancellationToken ct) => _initialSettings.Task.WaitAsync(ct);
+
+    internal async ValueTask<(bool Sent, bool Confirmed)> SetAdaptiveStrengthAsync(byte strength, CancellationToken ct)
+    {
+        var reply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_stateLock)
+        {
+            if (strength > 100 || State.ListeningMode != ListeningMode.Adaptive
+                || (State.Capabilities & DeviceCapabilities.Adaptive) == 0 || _adaptiveWrite is not null)
+            {
+                return (false, false);
+            }
+            _adaptiveWrite = (strength, reply);
+        }
+        try
+        {
+            if (!await WriteAsync(Aap.Setting(Aap.AdaptiveStrengthId, strength), ct).ConfigureAwait(false))
+            {
+                return (false, false);
+            }
+            bool confirmed = await Task.WhenAny(reply.Task, Task.Delay(450, ct)).ConfigureAwait(false) == reply.Task;
+            return (true, confirmed);
+        }
+        finally
+        {
+            lock (_stateLock)
+            {
+                _adaptiveWrite = null;
+            }
+        }
     }
 
     public Task<bool> SetHearingAidAsync(bool on, CancellationToken ct = default) => SetHearingModesAsync(on, null, null, ct);
@@ -598,14 +752,28 @@ public sealed class AapSession : IAsyncDisposable
         lock (_stateLock)
         {
             change = Aap.Apply(packet, State);
+            if (Aap.TryReadCustomEq(packet) is { } eq)
+            {
+                _customEqReport.TrySetResult(eq);
+                if (_customEqWrite is { } eqWrite && eq == eqWrite.Eq) eqWrite.Reply.TrySetResult();
+            }
+            if (isSetting && packet[6] == Aap.AdaptiveStrengthId && packet[7] <= 100)
+            {
+                if (_adaptiveWrite is { } write && packet[7] == write.Strength)
+                {
+                    write.Reply.TrySetResult();
+                }
+            }
             if (change != DeviceChange.None)
             {
+                if ((change & DeviceChange.ListeningMode) != 0) CompleteListeningModeDispatchWait();
                 Changed?.Invoke(change);
                 SavePodSettings(change);
             }
         }
         if ((change & DeviceChange.HeartRate) != 0)
         {
+            if (State.HeartRateBpm is byte bpm) HeartRateSample?.Invoke(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), bpm);
             _heartRateReading?.TrySetResult();
         }
         if (State.InitialReportDone && State.Reported != _savedReported)
@@ -665,6 +833,10 @@ public sealed class AapSession : IAsyncDisposable
         else if (opcode == 0x31)
         {
             Log.Info("aap", $"RX 0x31 keys reply, {packet.Length} bytes (content not logged)");
+        }
+        else if (opcode == 0x17 && (HeadMotion.IsReport(packet) || packet.Length >= 12 && packet[8] == 0x10 && packet[9] == 0))
+        {
+            // Motion and optical sensor payloads do not belong in the diagnostic log.
         }
         else if (!_lastInbound.TryGetValue(opcode, out byte[]? last) || !packet.SequenceEqual(last))
         {
@@ -738,6 +910,10 @@ public sealed class AapSession : IAsyncDisposable
             {
                 Log.Warn("aap", "init: mic side not written");
             }
+            if (_settings.Get(Address).SleepPause && (State.Capabilities & DeviceCapabilities.SleepDetection) != 0)
+            {
+                await EnableSleepDetectionAsync(ct).ConfigureAwait(false);
+            }
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 TaskCompletionSource reply = NewSignal();
@@ -778,6 +954,7 @@ public sealed class AapSession : IAsyncDisposable
                 Changed?.Invoke(DeviceChange.InitialReport);
                 SavePodSettings(DeviceChange.InitialReport);
             }
+            _initialSettings.TrySetResult();
             SaveCapabilities();
         }
         catch (OperationCanceledException)
@@ -851,9 +1028,10 @@ public sealed class AapSession : IAsyncDisposable
             long wait;
             lock (_stateLock)
             {
-                (bool changed, wait) = State.ExpireListeningModes();
+                (bool changed, wait) = State.ExpireListeningModes(Environment.TickCount64);
                 if (changed)
                 {
+                    CompleteListeningModeDispatchWait();
                     Changed?.Invoke(DeviceChange.ListeningMode);
                     SavePodSettings(DeviceChange.ListeningMode);
                 }
@@ -881,10 +1059,19 @@ public sealed class AapSession : IAsyncDisposable
         {
             if (State.DropListeningMode(id))
             {
+                CompleteListeningModeDispatchWait();
                 Changed?.Invoke(DeviceChange.ListeningMode);
                 SavePodSettings(DeviceChange.ListeningMode);
             }
         }
+    }
+
+    // Called under _stateLock after the report, failure or expiry settles the latest mode.
+    private void CompleteListeningModeDispatchWait()
+    {
+        if (State.ListeningModeSelection.Pending) return;
+        _listeningModeSettled?.TrySetResult();
+        _listeningModeSettled = null;
     }
 
     // iOS writes 0x1A on every reconnect and the AirPods never report it on attach, so the stored mask is written.

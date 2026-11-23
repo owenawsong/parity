@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <DefineConstants>$(DefineConstants);PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Core/BatteryTimeline.cs" Link="BatteryTimeline.cs" />
+    <Compile Include="../../../src/WPods/Core/Mac.cs" Link="Mac.cs" />
+  </ItemGroup>
+</Project>

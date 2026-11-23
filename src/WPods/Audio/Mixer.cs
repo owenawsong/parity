@@ -49,6 +49,14 @@ public sealed unsafe partial class Mixer : IDisposable
     private HashSet<string> _ownMicIds = [];
     private HashSet<ulong> _pairs = [];
     private ulong _target;
+    private string? _monitor;
+    private string? _monitorStatus;
+    internal const string EarbudMic = "parity:earbud-microphone";
+#if PAIRSIDE_LIVE
+    private EarbudMonitor? _listenGraph;
+    private CancellationTokenSource? _openingMonitor;
+    private int _listenVolume;
+#endif
     private bool _refreshPending;
     private bool _refreshing;
     private bool _disposed;
@@ -98,6 +106,145 @@ public sealed unsafe partial class Mixer : IDisposable
         }
     }
 
+    public string? MonitorSource
+    {
+        get { lock (_lock) return _monitor; }
+    }
+
+    internal string? MonitorStatus
+    {
+        get
+        {
+            lock (_lock)
+            {
+#if PAIRSIDE_LIVE
+                if (_listenGraph?.Failed == true)
+                {
+                    StopMonitorLocked();
+                    _monitorStatus = "unavailable";
+                }
+                if (_monitorStatus == "earbuds" && _listenGraph?.Rendering != true) return "waiting";
+#endif
+                return _monitorStatus;
+            }
+        }
+    }
+
+    // An explicit monitor belongs to the current pair and is independent of the saved mixer selection.
+    internal bool StartMonitor(ulong address, string id, int percent)
+    {
+        lock (_lock)
+        {
+            if (_disposed || !_available || _target != address || address == 0 ||
+                !(AppIdentity.IsPairside && id == EarbudMic) && !_devices.Any(d => d.Id == id && d.Flow == MixerFlow.Input && d.State == MixerState.Active &&
+                    d.Pair == 0 && !d.OwnMic))
+            {
+                return false;
+            }
+            if (_monitor == id) return true;
+            StopMonitorLocked();
+#if PAIRSIDE_LIVE
+            if (id == EarbudMic)
+            {
+                _monitor = id;
+                _monitorStatus = "starting";
+                _listenVolume = Math.Clamp(percent, 0, 50);
+                var opening = new CancellationTokenSource();
+                _openingMonitor = opening;
+                _ = Task.Run(() => OpenMonitor(address, opening));
+                return true;
+            }
+#endif
+            if (!SetSource(id, Math.Clamp(percent, 0, 50))) return false;
+            _monitor = id;
+            _monitorStatus = "mixer";
+            return true;
+        }
+    }
+
+#if PAIRSIDE_LIVE
+    private void OpenMonitor(ulong address, CancellationTokenSource opening)
+    {
+        EarbudMonitor? graph = null;
+        try
+        {
+            opening.Token.ThrowIfCancellationRequested();
+            graph = new EarbudMonitor(address);
+            lock (_lock)
+            {
+                if (_openingMonitor != opening || _disposed) return;
+                graph.Start(_listenVolume);
+                _monitorStatus = "earbuds";
+                _listenGraph = graph;
+                _mic.Decoded += graph.Push;
+                graph = null;
+                UpdateDirectLocked();
+                Log.Info("listen", "Earbud microphone monitor started on paired output");
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (_lock)
+            {
+                if (_openingMonitor != opening || _disposed) return;
+                Log.Warn("listen", $"Direct monitor unavailable: {ex.Message}");
+                StopMonitorLocked();
+                _monitorStatus = "unavailable";
+            }
+        }
+        finally
+        {
+            graph?.Dispose();
+            lock (_lock)
+            {
+                if (_openingMonitor == opening) _openingMonitor = null;
+                opening.Dispose();
+            }
+        }
+    }
+#endif
+
+    internal void SetMonitorVolume(ulong address, string id, int percent)
+    {
+        lock (_lock)
+        {
+            if (_disposed || _monitor != id || _target != address) return;
+#if PAIRSIDE_LIVE
+            _listenVolume = Math.Clamp(percent, 0, 50);
+            if (_listenGraph is { } graph) graph.SetVolume(_listenVolume);
+            else if (_monitorStatus == "mixer") SetSource(id, _listenVolume);
+#else
+            SetSource(id, Math.Clamp(percent, 0, 50));
+#endif
+        }
+    }
+
+    internal void StopMonitor()
+    {
+        lock (_lock) StopMonitorLocked();
+    }
+
+    private void StopMonitorLocked()
+    {
+        if (_monitor is not { } id) return;
+        _monitor = null;
+#if PAIRSIDE_LIVE
+        _openingMonitor?.Cancel();
+        _openingMonitor = null;
+        if (_listenGraph is { } graph)
+        {
+            _mic.Decoded -= graph.Push;
+            graph.Dispose();
+        }
+        _listenGraph = null;
+#endif
+        _monitorStatus = null;
+        if (id == EarbudMic) { UpdateDirectLocked(); return; }
+        MixerConfig config = _settings.Mixer;
+        if (config.Enabled && config.Sources.Contains(id)) SetSource(id, config.Volume(id));
+        else RemoveSource(id);
+    }
+
     /// <summary>Picks or unpicks a listed endpoint; its volume is kept either way.</summary>
     public void SetPicked(string id, bool on)
     {
@@ -112,7 +259,7 @@ public sealed unsafe partial class Mixer : IDisposable
             if (on)
             {
                 sources.Add(id);
-                if (config.Enabled)
+                if (config.Enabled && _monitor != id)
                 {
                     SetSource(id, config.Volume(id));
                 }
@@ -120,7 +267,7 @@ public sealed unsafe partial class Mixer : IDisposable
             else
             {
                 sources.Remove(id);
-                RemoveSource(id);
+                if (_monitor != id) RemoveSource(id);
             }
             Save(config with { Sources = sources });
             Log.Info("mixer", $"{(on ? "picked" : "unpicked")} {id}");
@@ -138,7 +285,7 @@ public sealed unsafe partial class Mixer : IDisposable
             {
                 return;
             }
-            if (config.Enabled && config.Sources.Contains(id))
+            if (config.Enabled && config.Sources.Contains(id) && _monitor != id)
             {
                 SetSource(id, percent);
             }
@@ -161,6 +308,7 @@ public sealed unsafe partial class Mixer : IDisposable
             }
             foreach (string id in config.Sources)
             {
+                if (_monitor == id) continue;
                 if (on)
                 {
                     SetSource(id, config.Volume(id));
@@ -185,6 +333,7 @@ public sealed unsafe partial class Mixer : IDisposable
                 return;
             }
             _disposed = true;
+            StopMonitorLocked();
         }
         _connections.Attached -= OnAttached;
         _connections.Detached -= OnDetached;
@@ -222,6 +371,7 @@ public sealed unsafe partial class Mixer : IDisposable
             return;
         }
         _target = address;
+        StopMonitorLocked();
         int hr = wpn_mixer_set_target(address);
         Log.Info("mixer", $"output {(address == 0 ? "none" : Mac.Format(address))}, hr=0x{hr:X8}");
         UpdateDirectLocked();
@@ -231,7 +381,7 @@ public sealed unsafe partial class Mixer : IDisposable
     private void UpdateDirectLocked()
     {
         MixerConfig config = _settings.Mixer;
-        _mic.SetDirectListener(!_disposed && _target != 0 && config.Enabled && config.Sources.Overlaps(_ownMicIds));
+        _mic.SetDirectListener(!_disposed && _target != 0 && (_monitorStatus == "earbuds" || (config.Enabled && config.Sources.Overlaps(_ownMicIds))));
     }
 
     // Mic thread: each processed block, for the direct source (ignored by the engine while it has none).
@@ -350,6 +500,8 @@ public sealed unsafe partial class Mixer : IDisposable
                 return false;
             }
             _devices = found;
+            if (_monitor is { } monitor && monitor != EarbudMic && !found.Any(d => d.Id == monitor && d.State == MixerState.Active))
+                StopMonitorLocked();
             _ids = ids;
             _ownMicIds = ownMicIds;
             _pairs = pairs;
@@ -387,11 +539,11 @@ public sealed unsafe partial class Mixer : IDisposable
         }
     }
 
-    private void SetSource(string id, int percent)
+    private bool SetSource(string id, int percent)
     {
         if (!_available)
         {
-            return;
+            return false;
         }
         // Squared: a roughly even loudness step across the slider (50% = -12 dB).
         float level = percent / 100f;
@@ -400,6 +552,7 @@ public sealed unsafe partial class Mixer : IDisposable
         {
             Log.Warn("mixer", $"source {id} not set: error 0x{hr:X8}");
         }
+        return hr >= 0;
     }
 
     private void RemoveSource(string id)

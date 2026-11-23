@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using WPods.Audio;
 using WPods.Core;
+using WPods.Nearby;
 using Shortcut = WPods.Core.Shortcut;
 
 namespace WPods.Ui;
@@ -80,6 +81,13 @@ internal sealed partial class TrayApp
                 ToggleMainFromHotkey();
                 continue;
             }
+#if PAIRSIDE_LIVE
+            if (setting == "spatial")
+            {
+                if (SpotifyOwnsMotion && _spotifyHasPose) _headMotionTest?.RecenterAudio();
+                continue;
+            }
+#endif
             int slot = items.Count;
             items.Add(null);
             void Pending(OsdItem item)
@@ -89,6 +97,7 @@ internal sealed partial class TrayApp
             }
             Outcome outcome = setting switch
             {
+                "connection" => await ConnectionAsync(group, Pending),
                 "noise" => await NoiseAsync(group[0], Pending),
                 "mic" => await MicAsync(group[0], Pending),
                 _ => await ToggleAsync(setting, group, Pending),
@@ -140,17 +149,17 @@ internal sealed partial class TrayApp
                 "noise.adaptive" => ListeningMode.Adaptive,
                 _ => ListeningMode.NoiseCancellation,
             };
-            if (target == ListeningMode.Off && !OffAllowed(s))
+            if (target == ListeningMode.Off && !s.SupportsListeningMode(target))
             {
                 return Fail(NoiseName(target), Text("osd.offNotAllowed"));
             }
-            if (target == ListeningMode.Adaptive && (caps & DeviceCapabilities.Adaptive) == 0)
+            if (!s.SupportsListeningMode(target))
             {
                 return Fail(NoiseName(target), Text("osd.notSupported"));
             }
             if (current == target)
             {
-                target = _noisePrevious is { } previous && previous != target && NoiseAllowed(s, previous) ? previous : NextNoise(session, target);
+                target = _noisePrevious is { } previous && previous != target && s.SupportsListeningMode(previous) ? previous : NextNoise(session, target);
             }
         }
         if (NoiseBlocked(s, target) is { } reason)
@@ -164,15 +173,6 @@ internal sealed partial class TrayApp
         return ok ? new Outcome(done, null) : Fail(NoiseName(target), Text("toast.noResponse"));
     }
 
-    private static bool OffAllowed(DeviceState s) => (s.Capabilities & DeviceCapabilities.AllowOff) == 0 || s.AllowOff != false;
-
-    private static bool NoiseAllowed(DeviceState s, ListeningMode mode) => mode switch
-    {
-        ListeningMode.Off => OffAllowed(s),
-        ListeningMode.Adaptive => (s.Capabilities & DeviceCapabilities.Adaptive) != 0,
-        _ => true,
-    };
-
     // The next mode after `from` in the stored press-and-hold cycle, as a stem press would pick it.
     private ListeningMode NextNoise(AapSession session, ListeningMode from)
     {
@@ -181,7 +181,7 @@ internal sealed partial class TrayApp
         for (int i = 1; i <= NoiseOrder.Length; i++)
         {
             ListeningMode mode = NoiseOrder[(start + i) % NoiseOrder.Length];
-            if ((cycle & StemOf(mode)) != 0 && NoiseAllowed(session.State, mode))
+            if ((cycle & StemOf(mode)) != 0 && session.State.SupportsListeningMode(mode))
             {
                 return mode;
             }
@@ -206,11 +206,10 @@ internal sealed partial class TrayApp
             return null;
         }
         DeviceState ears = s.EarSource;
-        DeviceState batteries = s.BatterySource;
         EarStatus? left = ears.LeftEar;
         EarStatus? right = ears.RightEar;
-        bool outOfEar = left != EarStatus.InEar && right != EarStatus.InEar
-            && (left is EarStatus.OutOfEar or EarStatus.InCase || right is EarStatus.OutOfEar or EarStatus.InCase);
+        static bool Away(EarStatus? ear) => ear is EarStatus.OutOfEar or EarStatus.InCase or EarStatus.Disconnected;
+        bool outOfEar = Away(left) && Away(right);
         if (outOfEar)
         {
             return "nc.outOfEarNote";
@@ -219,10 +218,8 @@ internal sealed partial class TrayApp
         {
             return null;
         }
-        int present = (batteries.LeftBattery.Percent is not null && left != EarStatus.Disconnected ? 1 : 0)
-            + (batteries.RightBattery.Percent is not null && right != EarStatus.Disconnected ? 1 : 0);
-        int inEar = (left == EarStatus.InEar ? 1 : 0) + (right == EarStatus.InEar ? 1 : 0);
-        return present < 2 || inEar == 1 ? "nc.oneBudNote" : null;
+        return (left == EarStatus.InEar && Away(right)) || (right == EarStatus.InEar && Away(left))
+            ? "nc.oneBudNote" : null;
     }
 
     private string NoiseName(ListeningMode mode) => Text("nc." + MessageWriter.Camel(mode));
@@ -323,6 +320,7 @@ internal sealed partial class TrayApp
         {
             "mixer" => (Text("mixer.title"), "mixer"),
             "lowLatency" => (Text("windows.latency"), "latency"),
+            "lowLatencyMic" => (Text("windows.latencyMic"), "mic"),
             "handsFree" => (Text("hotkeys.handsFree"), "hands-free"),
             "conversation" => (Text("features.conversation"), "conversation"),
             "hearingAid" => (Text("features.hearingAid"), "ear"),
@@ -350,6 +348,7 @@ internal sealed partial class TrayApp
         {
             "mixer" => _settings.Mixer.Enabled,
             "lowLatency" => host.LowLatency,
+            "lowLatencyMic" when Models.HasStereoMic(s!.ModelNumber) => host.LowLatencyMic,
             "handsFree" => !host.DisableHandsFree,
             "conversation" when (caps & DeviceCapabilities.ConversationAwareness) != 0 => s!.ConversationAwareness == true,
             "hearingAid" when (caps & DeviceCapabilities.HearingAid) != 0 => s!.HearingAidEnabled,
@@ -382,6 +381,10 @@ internal sealed partial class TrayApp
                 SendHostSettings(session.Address);
                 failure = on ? "toast.lowLatencyFailed" : failure;
                 break;
+            case "lowLatencyMic":
+                ok = await ApplyHostSettingsAsync(session!.Address, h => h with { LowLatencyMic = on }, toast: false);
+                SendHostSettings(session.Address);
+                break;
             case "handsFree":
                 ok = await ApplyHostSettingsAsync(session!.Address, h => h with { DisableHandsFree = !on }, toast: false);
                 SendHostSettings(session.Address);
@@ -398,6 +401,36 @@ internal sealed partial class TrayApp
                 break;
         }
         return ok ? new Outcome(done, on ? Sounds.Cue.On : Sounds.Cue.Off) : Fail(title, Text(failure));
+    }
+
+    private async Task<Outcome> ConnectionAsync(List<string> group, Action<OsdItem> pending)
+    {
+        ulong attached = _connections.Session?.Address ?? 0;
+        var inFlight = _connecting.Concat(_nearby.Offers
+            .Where(o => o.State == OfferState.Connecting).Select(o => o.Address));
+        ulong address = ConnectionShortcut.Target(attached, _connections.LastUsed, inFlight, _connections.GetDevices().Select(d => d.Address));
+        bool busy = _connecting.Contains(address) || _nearby.Offers.Any(o => o.Address == address && o.State == OfferState.Connecting);
+        string title = Find(address)?.Name is { Length: > 0 } name ? name : Text("app.name");
+        var off = new OsdItem("bluetooth", title, Text("status.notConnected"), "off");
+        var on = new OsdItem("bluetooth", title, Text("status.connected"), "on");
+        var waiting = new OsdItem("bluetooth", title, Text("status.connecting"), "pending");
+        switch (ConnectionShortcut.Resolve(group, attached != 0, busy))
+        {
+            case ConnectionIntent.AlreadyConnected: return new Outcome(on, null);
+            case ConnectionIntent.AlreadyDisconnected: return new Outcome(off, null);
+            case ConnectionIntent.Wait: return new Outcome(waiting, null);
+            case ConnectionIntent.Cancel:
+                if (_connecting.Contains(address)) Cancel(address);
+                else _nearby.CancelConnect(address);
+                return new Outcome(off, Sounds.Cue.Off);
+            case ConnectionIntent.Disconnect:
+                return await DisconnectCoreAsync(address) ? new Outcome(off, Sounds.Cue.Off) : Fail(title, Text("toast.disconnectFailed"));
+            default:
+                if (address == 0) return Fail(title, Text("toast.connectFailed"));
+                pending(waiting);
+                if (await ConnectCoreAsync(address) is { } failure) return Fail(title, Text("toast." + failure));
+                return _connections.Session?.Address == address ? new Outcome(on, Sounds.Cue.On) : new Outcome(off, null);
+        }
     }
 
     private void ToggleMainFromHotkey()
@@ -555,7 +588,7 @@ internal sealed partial class TrayApp
     private async void CreateOsd()
     {
         Log.Info("ui", "osd: create");
-        var pane = new WebPane(OnOsdMessage, OnPaneFailed);
+        var pane = new WebPane(OnOsdMessage, OnPaneFailed, _prefs.ReduceMotion);
         var window = new PopupWindow(PopupBackground, Dark, pane);
         window.ScaleChanged += PlaceOsd;
         window.CloseRequested += HideOsd;

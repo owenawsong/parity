@@ -56,6 +56,7 @@ public sealed class ConnectionManager : IAsyncDisposable
     private AapSession? _session;
     // Closed session still shown during an automatic re-attach after no initial report; set only under the gate.
     private AapSession? _reattaching;
+    private AapSession? _controlsReadbackPrevious;
     private long _retrySerial;
     private bool _disposed;
 
@@ -68,8 +69,21 @@ public sealed class ConnectionManager : IAsyncDisposable
 
     public AapSession? Session => Volatile.Read(ref _session);
 
-    /// <summary>UI display only: also the closed session during an automatic re-attach, so the pair keeps its connected look.</summary>
-    public AapSession? ShownSession => Session ?? Volatile.Read(ref _reattaching);
+    /// <summary>UI display only: hold the last complete snapshot while refreshing controls on the same audio link.</summary>
+    public AapSession? ShownSession
+    {
+        get
+        {
+            AapSession? previous = Volatile.Read(ref _controlsReadbackPrevious);
+            AapSession? active = Session;
+            if (previous is not null && (active is null || active.Address == previous.Address)
+                && _link.IsUp(previous.Address) && GetIdle(previous.Address) == IdleReason.None)
+            {
+                return previous;
+            }
+            return active ?? (previous is null ? Volatile.Read(ref _reattaching) : null);
+        }
+    }
 
     public ulong LastUsed => Settings.LastUsed;
 
@@ -81,6 +95,7 @@ public sealed class ConnectionManager : IAsyncDisposable
 
     /// <summary>ACL link of a paired AirPods went up (true) or down (false).</summary>
     public event Action<ulong, bool>? LinkChanged;
+    internal event Action<ulong>? DisconnectRequested;
 
     /// <summary>The result of <see cref="GetDevices"/> changed.</summary>
     public event Action? DevicesChanged;
@@ -127,7 +142,9 @@ public sealed class ConnectionManager : IAsyncDisposable
     /// Switches the session to a pair whose link is already up. Never pages. On failure a fresh retry series runs,
     /// so the pair may still attach shortly after (<see cref="Attached"/>).
     /// </summary>
-    public async Task<bool> ConnectAsync(ulong address)
+    public Task<bool> ConnectAsync(ulong address) => ConnectAsync(address, null);
+
+    internal async Task<bool> ConnectAsync(ulong address, Func<bool>? requestIsCurrent)
     {
         Log.Info("conn", $"ConnectAsync {Mac.Format(address)}: waiting for gate");
         long waitStart = Environment.TickCount64;
@@ -135,7 +152,7 @@ public sealed class ConnectionManager : IAsyncDisposable
         try
         {
             Log.Info("conn", $"ConnectAsync {Mac.Format(address)}: gate after {Environment.TickCount64 - waitStart} ms, session={Describe(_session)}, linkUp={_link.IsUp(address)}");
-            if (_disposed)
+            if (_disposed || requestIsCurrent?.Invoke() == false)
             {
                 return false;
             }
@@ -181,16 +198,72 @@ public sealed class ConnectionManager : IAsyncDisposable
         }
     }
 
+    // Reopen Pairside's controls so the earbuds send their settings snapshot. The Windows audio link stays up.
+    internal Task<OnboardEq?> ReadBackCustomEqAsync(AapSession expected, Func<bool> microphoneIdle, CancellationToken ct) =>
+        ReadBackSettingsAsync(expected, microphoneIdle, static (session, token) => session.ReadCustomEqAsync(token),
+            static session => session.State.CustomEq, ct);
+
+    private async Task<T?> ReadBackSettingsAsync<T>(AapSession expected, Func<bool> microphoneIdle,
+        Func<AapSession, CancellationToken, Task> waitForReport, Func<AapSession, T?> currentValue, CancellationToken ct) where T : struct
+    {
+        bool holdingSnapshot = false;
+        try
+        {
+            AapSession? refreshed;
+            await _gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                ulong address = expected.Address;
+                if (_disposed || _session != expected || _controlsReadbackPrevious is not null
+                    || !_link.IsUp(address) || expected.CallAudio || !microphoneIdle())
+                {
+                    return null;
+                }
+                holdingSnapshot = true;
+                Volatile.Write(ref _controlsReadbackPrevious, expected);
+                Volatile.Write(ref _reattaching, expected);
+                try
+                {
+                    await DetachLocked("refresh settings readback").ConfigureAwait(false);
+                    refreshed = AttachLocked(address, "refresh settings readback", newSeries: true) ? _session : null;
+                }
+                finally
+                {
+                    Volatile.Write(ref _reattaching, null);
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+            if (refreshed is null)
+            {
+                return null;
+            }
+            await waitForReport(refreshed, ct).ConfigureAwait(false);
+            await refreshed.WaitForInitialSettingsAsync(ct).ConfigureAwait(false);
+            return Session == refreshed ? currentValue(refreshed) : null;
+        }
+        finally
+        {
+            if (holdingSnapshot)
+            {
+                Volatile.Write(ref _controlsReadbackPrevious, null);
+                DevicesChanged?.Invoke();
+            }
+        }
+    }
+
     /// <summary>
     /// Mac-like full disconnect: detaches at once, then asks Windows to drop the audio link, again if it is still up
     /// 3 s later. False when there is no session or both requests failed (the pair is then attached again).
     /// </summary>
-    public async Task<bool> DisconnectAsync()
+    public async Task<bool> DisconnectAsync(ulong? expectedAddress = null)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
-            return await DisconnectCoreAsync(done).ConfigureAwait(false);
+            return await DisconnectCoreAsync(done, expectedAddress).ConfigureAwait(false);
         }
         finally
         {
@@ -206,13 +279,15 @@ public sealed class ConnectionManager : IAsyncDisposable
 
     private PendingDisconnect? _pendingDisconnect;
 
-    private async Task<bool> DisconnectCoreAsync(TaskCompletionSource done)
+    private async Task<bool> DisconnectCoreAsync(TaskCompletionSource done, ulong? expectedAddress)
     {
         ulong address;
         Task linkDown;
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // A concurrent switch may have finished while the UI stopped the mic or this request waited on the gate.
+            if (expectedAddress is { } expected && _session?.Address != expected) return true;
             if (_session is not { } session)
             {
                 Log.Info("conn", "DisconnectAsync -> false (no session)");
@@ -221,6 +296,7 @@ public sealed class ConnectionManager : IAsyncDisposable
             address = session.Address;
             Log.Info("conn", $"DisconnectAsync {Mac.Format(address)}");
             Volatile.Write(ref _pendingDisconnect, new PendingDisconnect(address, done.Task));
+            DisconnectRequested?.Invoke(address);
             RemoveRetryLocked(address);
             linkDown = WaitForLinkDown(address);
             SetIdle(address, IdleReason.UserDisconnected, "user disconnect");
@@ -294,7 +370,7 @@ public sealed class ConnectionManager : IAsyncDisposable
     public async Task SetHostSettingsAsync(ulong address, HostSettings settings)
     {
         bool handsFreeChanged = Settings.Get(address).DisableHandsFree != settings.DisableHandsFree;
-        Log.Info("conn", $"host settings {Mac.Format(address)}: disableHandsFree={settings.DisableHandsFree} lowLatency={settings.LowLatency} micMode={settings.MicMode} duckPercent={settings.DuckPercent}");
+        Log.Info("conn", $"host settings {Mac.Format(address)}: disableHandsFree={settings.DisableHandsFree} playbackKeepAlive={settings.LowLatency} micKeepAlive={settings.LowLatencyMic} micMode={settings.MicMode} duckPercent={settings.DuckPercent}");
         Settings.Set(address, settings);
         if (handsFreeChanged && Session?.Address == address)
         {
@@ -350,8 +426,21 @@ public sealed class ConnectionManager : IAsyncDisposable
         foreach (LinkDevice device in _link.Snapshot())
         {
             cleared |= CheckPairing(device.Address);
+            SeedMicDefaults(device.Address, Settings.GetModel(device.Address)?.Number ?? Models.ModelNumberOf(device.ProductId));
         }
         return cleared;
+    }
+
+    private void SeedMicDefaults(ulong address, string? modelNumber)
+    {
+        try
+        {
+            Settings.SeedMicDefaults(address, modelNumber);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn("conn", $"mic defaults for {Mac.Format(address)} not saved: {e.Message}");
+        }
     }
 
     // A new install date of the pair's Windows device entry means it was removed and paired again: its remembered
@@ -510,7 +599,7 @@ public sealed class ConnectionManager : IAsyncDisposable
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_disposed || GetIdle(address) == IdleReason.None || !_link.IsUp(address))
+            if (_disposed || !DisconnectFinished(address).IsCompleted || GetIdle(address) == IdleReason.None || !_link.IsUp(address))
             {
                 return;
             }
@@ -646,6 +735,7 @@ public sealed class ConnectionManager : IAsyncDisposable
         // Before the session reads the remembered capabilities and pod-saved settings.
         CheckPairing(address);
         var session = new AapSession(address, stream, Settings, _link.ProductId(address));
+        SeedMicDefaults(address, session.State.ModelNumber);
         if (_reattaching is { } previous && previous.Address == address)
         {
             session.CarryOver(previous);

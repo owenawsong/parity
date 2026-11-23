@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <DefineConstants>$(DefineConstants);PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Ui/ConnectionShortcut.cs" Link="ConnectionShortcut.cs" />
+    <Compile Include="../../../src/WPods/Ui/Hotkeys.cs" Link="Hotkeys.cs" />
+  </ItemGroup>
+</Project>

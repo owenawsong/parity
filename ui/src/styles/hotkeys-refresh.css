@@ -1,0 +1,105 @@
+.wp-shortcuts {
+  container: shortcuts / inline-size;
+}
+
+.wp-shortcut-intro {
+  margin: 0 0 8px;
+  max-inline-size: 60ch;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.wp-shortcut-filters {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block-end: 8px;
+}
+
+.wp-shortcut-filters .wp-search {
+  flex: 1 1 10rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.wp-shortcut-filter {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  min-block-size: 36px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.wp-shortcut-filter > :last-child {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+.wp-shortcut-filter:hover { background: var(--fill-subtle-hover); }
+.wp-shortcut-filter[aria-pressed='true'] {
+  color: var(--accent-text);
+  border-color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.wp-shortcut-filter[aria-pressed='true'] > span { color: inherit; }
+.wp-shortcut-filter:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+.wp-shortcuts .wp-shortcut-group {
+  border: 1px solid var(--pairside-line);
+  background: var(--surface-card);
+}
+.wp-shortcuts .wp-shortcut-group > summary:hover { background: var(--fill-subtle-hover); border-radius: inherit; }
+.wp-shortcuts .wp-shortcut-group > summary > .wp-shortcut-warning { flex: none; display: inline-flex; }
+.wp-shortcuts .wp-shortcut-warning > .wp-icon { color: var(--warning-text); rotate: none; }
+.wp-shortcuts .wp-hk__field.is-empty {
+  border: 0;
+  background: var(--fill-control);
+  border-radius: 7px;
+  color: var(--text-primary);
+}
+.wp-shortcuts .wp-hk__field.is-empty:hover { background: var(--fill-control-hover); }
+.wp-shortcuts .wp-hk__clear { color: var(--text-secondary); }
+.wp-shortcuts .wp-hk__clear:hover { color: var(--danger-text); }
+.wp-shortcuts .wp-shortcut-sounds {
+  margin-block: 12px 0;
+  padding-block-start: 12px;
+  border-block-start: 1px solid var(--pairside-line);
+}
+.wp-shortcut-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 26px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.wp-shortcut-empty p { margin: 0; }
+.wp-shortcut-empty .wp-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+.wp-shortcut-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+@container shortcuts (max-width: 310px) {
+  .wp-shortcut-filters { gap: 5px; }
+  .wp-shortcut-filters .wp-search { flex-basis: 8rem; }
+  .wp-shortcut-filter { gap: 5px; padding-inline: 8px; }
+  .wp-shortcuts .wp-row__head { flex-wrap: wrap; }
+  .wp-shortcuts .wp-hk__end { max-width: 100%; margin-inline-start: auto; }
+}

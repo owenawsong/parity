@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en" data-appearance="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compare AirPods Pro 3 motion and try it in Parity.">
+  <title>AirPods Pro 3 Motion · Parity</title>
+  <link rel="stylesheet" href="gallery.css">
+  <script type="module" src="gallery.js"></script>
+</head>
+<body>
+  <header class="mast">
+    <div class="wrap mast-inner">
+      <a class="wordmark" href="#library">Parity</a>
+      <nav aria-label="Gallery">
+        <a href="flow.html">Connection flow</a>
+        <a href="#library">Clips</a>
+        <a href="#previews">App previews</a>
+        <a href="#references">Online references</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="library" aria-labelledby="title">
+      <div class="title-row">
+        <div>
+          <h1 id="title">AirPods Pro 3 motion</h1>
+          <p class="intro">Play the original clips, compare them, and see how they fit the app.</p>
+        </div>
+        <fieldset class="appearance">
+          <legend>Background</legend>
+          <div class="segments">
+            <label><input type="radio" name="appearance" value="dark" checked>Dark</label>
+            <label><input type="radio" name="appearance" value="light">Light</label>
+            <label><input type="radio" name="appearance" value="checker">Checker</label>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="workbench">
+        <aside class="clips" aria-labelledby="clips-title">
+          <h2 id="clips-title">Clips</h2>
+          <div id="clip-list"></div>
+        </aside>
+        <div class="view">
+          <div class="view-actions">
+            <label class="toggle"><input id="compact" type="checkbox"> Actual popup size</label>
+            <button id="compare" type="button" aria-pressed="false">Compare clips</button>
+          </div>
+          <label id="comparison-choice" class="choice" hidden>
+            Compare with
+            <select id="comparison"></select>
+          </label>
+          <div id="players" class="players"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="previews" class="lower-section" aria-labelledby="preview-title">
+      <h2 id="preview-title">In Parity</h2>
+      <p>These previews use the app’s actual UI and simulated AirPods data.</p>
+      <div class="two-up">
+        <a class="preview-card" href="preview/Latchwave%20Popup.html">
+          <strong>Nearby popup</strong>
+          <span>Simulate detection to see the card appear and start the split rotation.</span>
+        </a>
+        <a class="preview-card" href="preview/Pairside.html">
+          <strong>Main window</strong>
+          <span>Open the case with both buds seated to see the short three-quarter reveal.</span>
+        </a>
+      </div>
+    </section>
+
+    <section id="references" class="lower-section" aria-labelledby="reference-title">
+      <h2 id="reference-title">Online references</h2>
+      <div class="two-up">
+        <article class="reference">
+          <h3>MagicPods popup</h3>
+          <p>A Pro 3 connection card in use on a desktop.</p>
+          <details data-reference="magicpods"><summary>Watch demo</summary><div class="embed"></div></details>
+          <a href="https://magicpods.app/blog/post-13/" target="_blank" rel="noreferrer">MagicPods project notes</a>
+        </article>
+        <article class="reference">
+          <h3>JNO’s Pro 3 model</h3>
+          <p>Interactive 3D hardware for comparing the case, hinge, and buds from different angles.</p>
+          <details data-reference="jno"><summary>Open 3D viewer</summary><div class="embed"></div></details>
+          <div class="reference-links">
+            <a href="https://www.artstation.com/marketplace/p/KmLKP/apple-airpods-pro-3" target="_blank" rel="noreferrer">Editable model listing</a>
+            <a href="https://www.cgtrader.com/3d-models/electronics/audio/tws-apple-airpods-pro-3" target="_blank" rel="noreferrer">Alternative Blender model</a>
+          </div>
+        </article>
+        <article class="reference">
+          <h3>Apple launch motion studies</h3>
+          <p>Micah Hoang’s Pro 3 launch work includes this silicone-tip sequence.</p>
+          <details data-reference="launch"><summary>Watch motion study</summary><div class="embed"></div></details>
+          <div class="reference-links">
+            <a href="https://micahhoang.com/case-studies/airpods" target="_blank" rel="noreferrer">Launch case study</a>
+            <a href="https://www.apple.com/airpods-pro/" target="_blank" rel="noreferrer">Apple’s launch film</a>
+          </div>
+        </article>
+        <article class="reference">
+          <h3>AirPodsDesktop</h3>
+          <p>Its Pro 3 animation uses the same Apple split rotation shown in the library.</p>
+          <a href="https://github.com/SpriteOvO/AirPodsDesktop/commit/5202a7b6962a4c1be15ab35ae008d608f506e7c2" target="_blank" rel="noreferrer">Animation source notes</a>
+        </article>
+      </div>
+    </section>
+  </main>
+  <footer class="wrap footer">
+    <span>Local Parity preview</span>
+    <a href="https://mesu.apple.com/assets/com_apple_MobileAsset_SharingDeviceAssets/com_apple_MobileAsset_SharingDeviceAssets.xml" target="_blank" rel="noreferrer">Apple asset catalog</a>
+  </footer>
+
+  <template id="player-template">
+    <article class="player">
+      <header class="player-header">
+        <h2 data-field="name"></h2>
+        <p data-field="description"></p>
+      </header>
+      <div class="stage"><video muted playsinline preload="metadata"></video></div>
+      <div class="transport">
+        <button type="button" data-action="play">Play</button>
+        <input type="range" data-action="seek" min="0" max="1" step="0.01" value="0" aria-label="Seek">
+        <output data-field="time">0:00 / 0:00</output>
+        <button type="button" data-action="loop" aria-pressed="true">Loop</button>
+      </div>
+      <p data-field="source" class="source"></p>
+      <p data-field="error" class="error" role="status" hidden></p>
+    </article>
+  </template>
+</body>
+</html>

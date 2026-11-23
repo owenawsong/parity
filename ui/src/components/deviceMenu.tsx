@@ -5,7 +5,7 @@ import type { Device, DeviceId } from '../protocol';
 
 type DeviceMenu = {
   el: HTMLDivElement;
-  button: HTMLButtonElement;
+  readonly title: HTMLElement;
   render: (devices: Device[], selected: Device) => void;
 };
 
@@ -14,32 +14,29 @@ type Item = {
   title: HTMLSpanElement;
   meta: HTMLSpanElement;
   check: SVGSVGElement;
-  index: number;
 };
 
-export const createDeviceMenu = (o: {
-  onPick: (id: DeviceId) => void;
-  onPair: () => void;
-}): DeviceMenu => {
+export const createDeviceMenu = (onPick: (id: DeviceId) => void): DeviceMenu => {
   let button!: HTMLButtonElement;
   let buttonName!: HTMLSpanElement;
   let staticBox!: HTMLSpanElement;
   let staticName!: HTMLSpanElement;
   let label!: HTMLDivElement;
   let menu!: HTMLDivElement;
-  let pair!: HTMLButtonElement;
   let open = false;
+  let motion: Animation | null = null;
   let items: HTMLButtonElement[] = [];
   const byId = new Map<DeviceId, Item>();
-  let focusAt = -1;
   let checkedAt = -1;
   let devices: Device[] = [];
   let selected: DeviceId | null = null;
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const collapsed = { opacity: '0', transform: 'translateY(-6px) scale(.97)' };
 
   const focusItem = (i: number): void => {
-    const n = items.length + 1;
+    const n = items.length;
     const k = ((i % n) + n) % n;
-    (k === items.length ? pair : items[k]).focus();
+    items[k].focus();
   };
   const createItem = (d: Device): Item => {
     let title!: HTMLSpanElement;
@@ -53,12 +50,9 @@ export const createDeviceMenu = (o: {
         class="wp-menu__item"
         role="menuitemradio"
         tabindex="-1"
-        onfocus={() => {
-          focusAt = item.index;
-        }}
         onclick={() => {
           close(true);
-          o.onPick(d.id);
+          onPick(d.id);
         }}
       >
         <span class="wp-menu__glyph">
@@ -71,22 +65,17 @@ export const createDeviceMenu = (o: {
         {check}
       </button>
     ) as HTMLButtonElement;
-    const item: Item = { btn, title, meta, check, index: 0 };
-
-    return item;
+    return { btn, title, meta, check };
   };
   /* Keyed by device id so a still-present item keeps its focus; a focused item that moves or goes away hands focus
      back while the menu is open. */
   const syncItems = (): void => {
     const active = document.activeElement;
-    const ids = new Set<DeviceId>();
-    for (const d of devices) {
-      ids.add(d.id);
-    }
-    let lost = false;
+    const previousIndex = items.indexOf(active as HTMLButtonElement);
+    const choices = devices.length > 1 ? devices : [];
+    const ids = new Set(choices.map(d => d.id));
     for (const [id, item] of byId) {
       if (!ids.has(id)) {
-        lost ||= item.btn === active;
         item.btn.remove();
         byId.delete(id);
       }
@@ -94,7 +83,7 @@ export const createDeviceMenu = (o: {
     items = [];
     checkedAt = -1;
     let prev: Element = label;
-    for (const [i, d] of devices.entries()) {
+    for (const [i, d] of choices.entries()) {
       let item = byId.get(d.id);
       if (!item) {
         item = createItem(d);
@@ -104,9 +93,8 @@ export const createDeviceMenu = (o: {
       if (checked) {
         checkedAt = i;
       }
-      item.index = i;
       setText(item.title, d.name);
-      setText(item.meta, t(`status.${d.conn}`));
+      setText(item.meta, t(d.conn === 'elsewhere' ? 'status.nearby' : `status.${d.conn}`));
       setAttr(item.btn, 'aria-checked', String(checked));
       setHidden(item.check, !checked);
       if (prev.nextSibling !== item.btn) {
@@ -114,39 +102,62 @@ export const createDeviceMenu = (o: {
       }
       prev = item.btn;
       items.push(item.btn);
-      if (item.btn === active) {
-        focusAt = i;
-        if (open && document.activeElement !== active) {
-          item.btn.focus();
-        }
-      }
     }
-    if (!open) {
+    if (open && previousIndex >= 0 && !items.includes(active as HTMLButtonElement)) {
+      focusItem(Math.min(previousIndex, items.length - 1));
+    } else if (open && active instanceof HTMLButtonElement && items.includes(active) && active !== document.activeElement) {
+      active.focus();
+    }
+  };
+  const animateMenu = (opening: boolean): void => {
+    const style = menu.hidden ? null : getComputedStyle(menu);
+    const from = style
+      ? { opacity: style.opacity, transform: style.transform }
+      : collapsed;
+    motion?.cancel();
+    motion = null;
+    if (reducedMotion.matches) {
+      setHidden(menu, !opening);
       return;
     }
-    if (lost) {
-      focusItem(Math.min(focusAt, items.length));
-    } else if (active === pair) {
-      focusAt = items.length;
-    }
+
+    setHidden(menu, false);
+    const animation = menu.animate(
+      [from, opening ? { opacity: '1', transform: 'none' } : collapsed],
+      {
+        duration: opening ? 220 : 150,
+        easing: opening ? 'cubic-bezier(.18,.76,.26,1)' : 'ease-in-out',
+        fill: 'both',
+      },
+    );
+    motion = animation;
+    void animation.finished.then(() => {
+      if (motion === animation) {
+        setHidden(menu, !opening);
+        motion = null;
+        animation.cancel();
+      }
+    }, () => undefined);
   };
   const close = (refocus: boolean): void => {
     if (!open) {
       return;
     }
     open = false;
-    setHidden(menu, true);
     button.setAttribute('aria-expanded', 'false');
     if (refocus) {
       button.focus();
     }
+    menu.inert = true;
+    animateMenu(false);
   };
   const openMenu = (): void => {
     open = true;
     syncItems();
-    setHidden(menu, false);
+    menu.inert = false;
     button.setAttribute('aria-expanded', 'true');
-    focusItem(checkedAt < 0 ? items.length : checkedAt);
+    animateMenu(true);
+    focusItem(checkedAt < 0 ? 0 : checkedAt);
   };
 
   const el = (
@@ -154,6 +165,7 @@ export const createDeviceMenu = (o: {
       <button
         type="button"
         class="wp-devswitch"
+        aria-controls="wp-device-menu"
         aria-haspopup="menu"
         aria-expanded="false"
         ref={button}
@@ -177,16 +189,18 @@ export const createDeviceMenu = (o: {
         <span class="wp-devswitch__name" ref={buttonName} />
         <Icon name="chevron-down" />
       </button>
-      <span class="wp-devswitch wp-devswitch--static" ref={staticBox}>
+      <span class="wp-devswitch wp-devswitch--static" tabindex="-1" ref={staticBox}>
         <span class="wp-devswitch__name" ref={staticName} />
       </span>
       <div
         class="wp-menu"
+        id="wp-device-menu"
         role="menu"
         l:aria-label="home.yourAirPods"
         hidden
         ref={menu}
         onkeydown={(e) => {
+          const focusAt = items.indexOf(document.activeElement as HTMLButtonElement);
           let next: number | null = null;
           if (e.key === 'ArrowDown') {
             next = focusAt + 1;
@@ -195,9 +209,9 @@ export const createDeviceMenu = (o: {
           } else if (e.key === 'Home') {
             next = 0;
           } else if (e.key === 'End') {
-            next = items.length;
+            next = items.length - 1;
           } else if (e.key === 'Tab') {
-            close(false);
+            close(true);
           } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -210,25 +224,6 @@ export const createDeviceMenu = (o: {
         }}
       >
         <div class="wp-menu__label" l:text="home.yourAirPods" ref={label} />
-        <div class="wp-menu__sep" role="separator" />
-        <button
-          type="button"
-          class="wp-menu__item wp-menu__item--compact"
-          role="menuitem"
-          tabindex="-1"
-          ref={pair}
-          onfocus={() => {
-            focusAt = items.length;
-          }}
-          onclick={() => {
-            close(false);
-            o.onPair();
-          }}
-        >
-          <Icon name="plus" class="wp-menu__glyph" />
-          <span class="wp-menu__title" l:text="menu.pairNew" />
-          <Icon name="external" class="wp-menu__ext" />
-        </button>
       </div>
     </div>
   ) as HTMLDivElement;
@@ -241,16 +236,20 @@ export const createDeviceMenu = (o: {
 
   return {
     el,
-    button,
+    get title() { return button.hidden ? staticBox : button; },
     render: (list, d) => {
       devices = list;
       selected = d.id;
       const multi = list.length > 1;
+      const restoreTitleFocus = !multi && (document.activeElement === button || menu.contains(document.activeElement));
       setHidden(button, !multi);
       setHidden(staticBox, multi);
-      setText(multi ? buttonName : staticName, d.name);
+      const name = multi ? buttonName : staticName;
+      setText(name, d.name);
+      setAttr(name, 'title', d.name);
       if (!multi) {
         close(false);
+        if (restoreTitleFocus) staticBox.focus({ preventScroll: true });
       } else if (open) {
         syncItems();
       }

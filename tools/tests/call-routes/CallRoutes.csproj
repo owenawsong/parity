@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefineConstants>$(DefineConstants);PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Audio/AudioEndpoints.cs" />
+    <Compile Include="../../../src/WPods/Audio/EarPlaybackRoutes.cs" />
+    <Compile Include="../../../src/WPods/Audio/ActiveMicrophoneRoutes.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpatialApp.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpotifyRouting.cs" />
+    <Compile Include="../../../src/WPods/Core/AppIdentity.cs" />
+  </ItemGroup>
+</Project>

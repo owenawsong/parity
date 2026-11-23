@@ -24,6 +24,10 @@ public sealed partial class DefaultOutputWatcher : IDisposable
     private static readonly Guid MmDeviceEnumeratorClass = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
     private static readonly Guid MmDeviceEnumeratorInterface = new("A95664D2-9614-4F35-A746-DE8DB63617E6");
 
+    internal static event Action? PlaybackRouteChanged;
+    private static int _endpointRevision;
+    internal static int EndpointRevision => Volatile.Read(ref _endpointRevision);
+
     private readonly ConnectionManager _connections;
     private readonly Lock _lock = new();
     // Set by the constructor.
@@ -215,7 +219,11 @@ public sealed partial class DefaultOutputWatcher : IDisposable
     [GeneratedComClass]
     private sealed partial class NotificationClient(DefaultOutputWatcher owner) : IMMNotificationClient
     {
-        public int OnDeviceStateChanged(nint deviceId, uint newState) => 0;
+        public int OnDeviceStateChanged(nint deviceId, uint newState)
+        {
+            PlaybackRouteChanged?.Invoke();
+            return 0;
+        }
 
         public int OnDeviceAdded(nint deviceId) => 0;
 
@@ -223,10 +231,23 @@ public sealed partial class DefaultOutputWatcher : IDisposable
 
         public int OnDefaultDeviceChanged(int flow, int role, nint defaultDeviceId)
         {
+            if (role == MultimediaRole && flow == RenderFlow) PlaybackRouteChanged?.Invoke();
+            if (role == MultimediaRole)
+            {
+                Interlocked.Increment(ref _endpointRevision);
+            }
             owner.OnDefaultDeviceChanged(flow, role);
             return 0;
         }
 
-        public int OnPropertyValueChanged(nint deviceId, PropertyKey key) => 0;
+        public int OnPropertyValueChanged(nint deviceId, PropertyKey key)
+        {
+            if (key.PropertyId == 14 && key.FormatId == new Guid("A45C254E-DF1C-4EFD-8020-67D146A850E0"))
+            {
+                Interlocked.Increment(ref _endpointRevision);
+                PlaybackRouteChanged?.Invoke();
+            }
+            return 0;
+        }
     }
 }

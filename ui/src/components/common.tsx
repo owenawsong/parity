@@ -1,3 +1,4 @@
+import { createSegmented } from './segmented';
 import { setAttr, setClass } from '../dom';
 import type { LabelKey } from '../i18n';
 import { Icon, type IconName, Spinner } from '../icons';
@@ -113,18 +114,51 @@ const Step = (p: { n: string; title: LabelKey; desc: LabelKey }) => (
   </li>
 );
 
-export const PairSteps = () => (
-  <ol class="wp-steps">
-    <Step n="1" title="pair.step1Title" desc="pair.step1Desc" />
-    <Step n="2" title="pair.step2Title" desc="pair.step2Desc" />
-    <Step n="3" title="pair.step3Title" desc="pair.step3Desc" />
-  </ol>
-);
+export const PairSteps = () => {
+  const models = [
+    {
+      value: 'front', label: 'pair.front',
+      steps: <ol class="wp-steps">
+        <Step n="1" title="pair.step1Title" desc="pair.frontModels" />
+        <Step n="2" title="pair.tapCase" desc="pair.step2Desc" />
+        <Step n="3" title="pair.step3Title" desc="pair.step3Desc" />
+      </ol>,
+    },
+    {
+      value: 'rear', label: 'pair.rear',
+      steps: <ol class="wp-steps">
+        <Step n="1" title="pair.step1Title" desc="pair.rearModels" />
+        <Step n="2" title="pair.step2Title" desc="pair.step2Desc" />
+        <Step n="3" title="pair.step3Title" desc="pair.step3Desc" />
+      </ol>,
+    },
+    {
+      value: 'max', label: 'pair.max',
+      steps: <ol class="wp-steps">
+        <Step n="1" title="pair.maxButton" desc="pair.step2Desc" />
+        <Step n="2" title="pair.step3Title" desc="pair.step3Desc" />
+      </ol>,
+    },
+  ] as const;
+  const picker = createSegmented({
+    name: 'pairModel', legend: 'pair.model', items: models.map(({ value, label }) => ({ value, label })),
+    onChange: selected => {
+      for (const model of models) (model.steps as HTMLElement).hidden = model.value !== selected;
+    },
+  });
+  picker.set('front');
+  const el = <div class="wp-pair-instructions">{picker.el}</div> as HTMLDivElement;
+  for (const model of models) {
+    (model.steps as HTMLElement).hidden = model.value !== 'front';
+    el.append(model.steps);
+  }
+  return el;
+};
 
 export const NavRow = (p: {
   icon: IconName;
   title: LabelKey;
-  desc: LabelKey;
+  desc?: LabelKey;
   onclick: () => void;
 }): HTMLButtonElement =>
   (
@@ -134,7 +168,7 @@ export const NavRow = (p: {
       </span>
       <span class="wp-row__text">
         <span class="wp-row__title" l:text={p.title} />
-        <span class="wp-row__desc" l:text={p.desc} />
+        {p.desc ? <span class="wp-row__desc" l:text={p.desc} /> : document.createDocumentFragment()}
       </span>
       <span class="wp-row__end">
         <Icon name="chevron-right" />

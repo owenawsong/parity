@@ -16,6 +16,7 @@ type HtmlAttrs<E> = Handlers<HTMLElementEventMap> &
     type?: string;
     role?: string;
     name?: string;
+    for?: string;
     value?: string;
     min?: string;
     max?: string;

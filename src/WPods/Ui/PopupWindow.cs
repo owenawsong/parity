@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace WPods.Ui;
 
 /// <summary>
@@ -10,6 +12,13 @@ internal sealed class PopupWindow : Form
     public const int MarginDip = 12;
 
     private bool _dark;
+    private Rectangle _presentedBounds;
+    private int _travel;
+    private double _reveal;
+    private double _motionFrom;
+    private double _motionTo;
+    private long _motionStarted;
+    private System.Windows.Forms.Timer? _motion;
 
     public PopupWindow(Color background, bool dark, WebPane pane)
     {
@@ -30,6 +39,96 @@ internal sealed class PopupWindow : Form
 
     /// <summary>Alt+F4 or an outside WM_CLOSE: the app hides the window instead.</summary>
     public event Action? CloseRequested;
+
+    public event Action? Dismissed;
+
+    public void Place(Rectangle bounds, int travel)
+    {
+        _presentedBounds = bounds;
+        _travel = travel;
+        if (Visible)
+        {
+            ApplyMotionFrame();
+        }
+    }
+
+    public void Present()
+    {
+        bool animate = !Pane.ReduceMotion && NativeUi.ClientAnimationsEnabled();
+        if (!Visible)
+        {
+            _reveal = animate ? 0 : 1;
+            ApplyMotionFrame();
+            Show();
+        }
+        AnimateTo(1, animate);
+    }
+
+    public void Dismiss() => AnimateTo(0, !Pane.ReduceMotion && NativeUi.ClientAnimationsEnabled());
+
+    private void AnimateTo(double target, bool animate)
+    {
+        if (animate && _motion?.Enabled == true && _motionTo == target)
+        {
+            return;
+        }
+        _motion?.Stop();
+        _motionTo = target;
+        if (!animate || _reveal == target || !Visible)
+        {
+            FinishMotion();
+            return;
+        }
+        if (_motion is null)
+        {
+            _motion = new System.Windows.Forms.Timer { Interval = 15 };
+            _motion.Tick += (_, _) => RunMotionFrame();
+        }
+        _motionFrom = _reveal;
+        _motionStarted = Stopwatch.GetTimestamp();
+        _motion.Start();
+    }
+
+    private void RunMotionFrame()
+    {
+        bool entering = _motionTo > _motionFrom;
+        double duration = entering ? 265 : 185;
+        double t = Stopwatch.GetElapsedTime(_motionStarted).TotalMilliseconds /
+            (duration * Math.Max(.45, Math.Abs(_motionTo - _motionFrom)));
+        if (t >= 1)
+        {
+            FinishMotion();
+            return;
+        }
+        double eased = entering ? 1 - Math.Pow(1 - t, 3) : t * t;
+        _reveal = _motionFrom + (_motionTo - _motionFrom) * eased;
+        ApplyMotionFrame();
+    }
+
+    private void ApplyMotionFrame()
+    {
+        Rectangle bounds = _presentedBounds;
+        bounds.Offset(0, (int)Math.Round((1 - _reveal) * _travel));
+        if (bounds != Bounds)
+        {
+            NativeUi.SetBounds(Handle, bounds);
+        }
+        Opacity = _reveal;
+    }
+
+    private void FinishMotion()
+    {
+        _motion?.Stop();
+        _reveal = _motionTo;
+        if (_motionTo == 0)
+        {
+            Hide();
+            Opacity = 1;
+            Dismissed?.Invoke();
+            return;
+        }
+        ApplyMotionFrame();
+    }
 
     protected override bool ShowWithoutActivation => true;
 
@@ -58,6 +157,7 @@ internal sealed class PopupWindow : Form
 
     public void Destroy()
     {
+        _motion?.Dispose();
         Pane.Dispose();
         Dispose();
     }

@@ -1,6 +1,7 @@
 /* Shown instead of every AirPods page when the PC's only Bluetooth adapters aren't connected over USB (UART, SDIO;
    error B3), which WPods can't work with. */
 import { setText } from '../dom';
+import { createConnectionDisclosure } from '../components/connectionCheck';
 import { bindAttr, t } from '../i18n';
 import { Art, Icon } from '../icons';
 import { LegalFoot } from './legal';
@@ -8,6 +9,7 @@ import type { Ctx, Page } from './page';
 
 export const createUnsupported = (ctx: Ctx): Page => {
   const legal = LegalFoot(ctx);
+  const check = createConnectionDisclosure();
   const art = Art({ model: 'empty', class: 'wp-empty__art' });
   bindAttr(art, 'aria-label', 'art.empty');
   let body!: HTMLParagraphElement;
@@ -31,6 +33,7 @@ export const createUnsupported = (ctx: Ctx): Page => {
             <span l:text="lang.title" />
           </button>
         </div>
+        {check.el}
       </div>
       {legal.el}
     </div>
@@ -40,10 +43,12 @@ export const createUnsupported = (ctx: Ctx): Page => {
     el,
     // Hooked to the title section because every section reruns on a language change.
     sections: {
+      connectionCheck: check.paint,
       title: () => {
         setText(body, t('adapter.body', { code: 'B3' }));
       },
     },
+    leave: check.leave,
     returnFocus: (from) => (from === 'language' ? toLanguage : legal.link),
   };
 };

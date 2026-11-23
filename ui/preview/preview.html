@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parity preview</title>
+  <style>/* PREVIEW_STYLES */</style>
+</head>
+<body>
+  <main class="desktop" aria-label="Parity desktop preview">
+    <header class="toolbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" class="pairside-mark"><path d="M8.9 4.8C10.7 2.7 12.7 1.8 15.2 1.8C19.8 1.8 23 5.5 23 10C23 14.4 19.5 18.3 15.1 18.3C12.1 18.3 9.8 16.7 8.7 14.3H12C15.2 14.3 17.4 12.1 17.4 9.4C17.4 6.7 15.2 4.8 12.3 4.8Z"/><path d="M8.9 4.8C10.7 2.7 12.7 1.8 15.2 1.8C19.8 1.8 23 5.5 23 10C23 14.4 19.5 18.3 15.1 18.3C12.1 18.3 9.8 16.7 8.7 14.3H12C15.2 14.3 17.4 12.1 17.4 9.4C17.4 6.7 15.2 4.8 12.3 4.8Z" transform="rotate(180 12 12)"/></svg>
+        </span>
+        <h1>Parity</h1>
+      </div>
+      <span class="preview-label">Simulated device preview</span>
+      <a class="toolbar-link" href="Latchwave Popup.html">Nearby popup <span aria-hidden="true">↗</span></a>
+    </header>
+
+    <div class="workspace">
+      <aside class="controls" aria-label="Preview controls">
+        <div class="control-group">
+          <label for="scenario">Device</label>
+          <select id="scenario">
+            <option value="connected">AirPods Pro 3</option>
+            <option value="max">AirPods Max</option>
+            <option value="nearby">AirPods nearby</option>
+            <option value="disconnected">Disconnected</option>
+            <option value="failed">Connection failed</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="theme">Appearance</label>
+          <select id="theme">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="connection-delay">Connection preview</label>
+          <select id="connection-delay">
+            <option value="830">Quick connect</option>
+            <option value="10500">Wait through a full turn</option>
+          </select>
+        </div>
+        <details>
+          <summary>Device and window</summary>
+          <div class="control-group">
+            <label for="buds">Earbuds charging</label>
+            <select id="buds">
+              <option value="0" selected>Neither</option>
+              <option value="3">Both</option>
+              <option value="1">Left only</option>
+              <option value="2">Right only</option>
+            </select>
+          </div>
+          <label class="preview-check"><input type="checkbox" id="case-reading" checked> Case reports battery</label>
+          <div class="control-group" id="window-controls" hidden>
+            <label for="width">Window width <output id="width-value" for="width"></output></label>
+            <input type="range" id="width" min="360" max="960" step="1" value="704">
+            <label for="height">Window height <output id="height-value" for="height"></output></label>
+            <input type="range" id="height" min="420" max="860" step="1" value="640">
+          </div>
+        </details>
+      </aside>
+
+      <section class="stage" aria-label="Parity window">
+        <div id="surface" class="surface" data-mode="tray">
+          <iframe id="preview" title="Parity device controls" sandbox="allow-scripts"></iframe>
+          <span id="resize" class="resize-grip" aria-hidden="true"></span>
+        </div>
+      </section>
+    </div>
+
+    <footer class="taskbar" aria-label="Preview taskbar">
+      <button type="button" id="tray" class="tray-button" aria-label="Toggle Parity tray panel" aria-controls="surface" aria-expanded="true" title="Parity">
+        <svg viewBox="0 0 24 24" class="pairside-mark" aria-hidden="true"><path d="M8.9 4.8C10.7 2.7 12.7 1.8 15.2 1.8C19.8 1.8 23 5.5 23 10C23 14.4 19.5 18.3 15.1 18.3C12.1 18.3 9.8 16.7 8.7 14.3H12C15.2 14.3 17.4 12.1 17.4 9.4C17.4 6.7 15.2 4.8 12.3 4.8Z"/><path d="M8.9 4.8C10.7 2.7 12.7 1.8 15.2 1.8C19.8 1.8 23 5.5 23 10C23 14.4 19.5 18.3 15.1 18.3C12.1 18.3 9.8 16.7 8.7 14.3H12C15.2 14.3 17.4 12.1 17.4 9.4C17.4 6.7 15.2 4.8 12.3 4.8Z" transform="rotate(180 12 12)"/></svg>
+      </button>
+    </footer>
+  </main>
+  <script>
+    /* PREVIEW_CONTROLS */
+    frame.srcdoc = /* FRAME_DOCUMENT */;
+  </script>
+</body>
+</html>

@@ -1,8 +1,10 @@
 # Builds the native DLLs, the web UI, the app and the service, and packs them into dist\WPods-Setup.exe.
 param(
-    [switch]$SkipNative # never build the native DLLs (use .build\native\bin as is)
+    [switch]$SkipNative, # use .build\native\bin as is
+    [switch]$NativeOnly # prepare the desktop payload without building the service or driver installer
 )
 $ErrorActionPreference = 'Stop'
+if ($NativeOnly -and $SkipNative) { throw 'Select either NativeOnly or SkipNative.' }
 
 $Version = '0.4.1' # the only place the product version is defined (app and installer)
 
@@ -42,6 +44,8 @@ if (-not $SkipNative) {
         }
     }
 }
+
+if ($NativeOnly) { return }
 
 # usbip-win2 installer for Setup; downloaded again only when its SHA-256 does not match.
 Invoke-Script 'native\fetch-usbip.ps1'
