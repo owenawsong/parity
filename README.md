@@ -13,15 +13,15 @@ Parity brings the controls you reach for most into the Windows tray. See each ea
 
 ## Open the case and connect
 
-<img align="right" src="docs/media/nearby.webp" width="242" alt="Parity's nearby connection popup with rendered AirPods Pro 3, earbud and case battery rings, and a Connect button">
-
 Open a recognized case near your PC and use the nearby prompt to connect. Once you're connected, Overview shows the separate batteries, listening modes available on your model, and playback controls for the active media app.
 
 A case can stop reporting after you close it. When Parity has an earlier reading, it shows the battery level with the time it was last seen.
 
 The nearby card shows one battery reading for the pair and one for the case. Turn on **Separate earbud batteries** in Settings if you want both earbud readings there too.
 
-<br clear="right">
+<p align="center">
+  <img src="docs/media/nearby.webp" width="262" alt="Parity’s nearby connection popup with rendered AirPods Pro 3, earbud and case battery rings, and a Connect button">
+</p>
 
 ## Make it sound the way you want
 
