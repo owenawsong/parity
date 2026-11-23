@@ -1,4 +1,9 @@
-# ![Parity, AirPods for Windows](docs/media/parity-banner.webp)
+<h1>
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="docs/media/parity-banner.webp">
+    <img src="docs/media/parity-banner-motion.webp" alt="Parity, AirPods for Windows">
+  </picture>
+</h1>
 
 **Control your AirPods from the Windows tray.** Switch listening modes, see what’s charged, and pick up what you were playing. Open the full app for on-device EQ, head-tracked spatial audio, microphone setup, and live heart rate on AirPods Pro 3.
 
@@ -25,12 +30,7 @@ Control playback from Overview, including seeking when the player supports it, o
 
 **On-device EQ.** The Recommended setting lets the earbuds manage their own tuning. Switch to Custom on compatible firmware to adjust bass, midrange, and treble. Parity sends the changes to your AirPods so you can hear them while you adjust.
 
-**Spatial Audio on Windows.** Switch between Stereo, Fixed, and Head Tracked. Fixed places a virtual soundstage in front of you. Head Tracked uses AirPods motion to keep that stage anchored as you turn. The speaker view shows which way you’re facing, and Recenter sets forward again. Adjust the speaker angle and level or try a source in Sound Check.
-
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/media/sound-workspace.webp">
-  <img src="docs/media/sound-in-motion.webp" alt="Parity’s custom equalizer beside a short demonstration of the head-tracking diagram. The listener turns while the two speaker markers stay in place." width="940">
-</picture>
+**Spatial Audio on Windows.** Adjust the virtual speakers’ angle and level, see which way you’re facing, or use Recenter to set forward again.
 
 | Mode | What it does |
 | --- | --- |
@@ -46,15 +46,9 @@ Parity renders spatial audio on the PC. Live Windows playback needs a compatible
 
 **Get the stem and gestures right.** Pick the modes that press-and-hold cycles through, set press timing and tone volume, or bind keyboard shortcuts to actions you use from other apps. Practice nodding and shaking, adjust sensitivity, and assign each gesture to a shortcut such as play/pause or changing listening mode.
 
-![Parity’s Microphone and Controls workspaces showing a live input meter, microphone options, stem modes, and gesture settings.](docs/media/controls-workspace.webp)
-
 ## Pulse
 
 On AirPods Pro 3, start a recording to see your heart rate as it changes. Adjust the time window, check the session’s range and average, or open an earlier recording and inspect a specific part of it. An optional local feed supplies the latest reading to a streaming overlay or another app on the same PC.
-
-<p align="center">
-  <img src="docs/media/pulse-workspace.webp" width="475" alt="Parity Pulse with a live heart-rate graph, current BPM, and session statistics using example readings">
-</p>
 
 <details>
 <summary>Device and Windows settings</summary>
