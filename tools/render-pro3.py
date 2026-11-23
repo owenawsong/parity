@@ -266,6 +266,41 @@ scene.view_settings.exposure = .35
 scene.render.image_settings.file_format = "PNG"
 scene.render.image_settings.color_mode = "RGBA"
 
+def render_hardware():
+    """Render the isolated pieces used in Parity's desktop package."""
+    case_objects = set(scene.objects) - set(buds)
+    for bud in buds:
+        case_objects.difference_update(bud.children_recursive)
+    studio = {obj for obj in case_objects if obj.type in {"CAMERA", "LIGHT"}}
+    case_objects.difference_update(studio)
+
+    def shot(name, shown, resolution, position, target, framing):
+        for obj in scene.objects:
+            if obj.type == "MESH":
+                obj.hide_render = obj not in shown
+        scene.render.resolution_x, scene.render.resolution_y = resolution
+        camera.location = position
+        point_at(camera, target)
+        camera.data.ortho_scale = framing
+        scene.render.filepath = str(out / (name + ".png"))
+        bpy.ops.render.render(write_still=True)
+
+    lid.rotation_euler.x = 0
+    shot("case", case_objects, (480, 360), (0.13, -17, 3.35), (0, 0, 2.35), 7.1)
+    shader.inputs["Base Color"].default_value = (.91, .42, .043, 1)
+    shader.inputs["Emission Color"].default_value = (.91, .38, .032, 1)
+    shot("case-charging", case_objects, (480, 360), (0.13, -17, 3.35), (0, 0, 2.35), 7.1)
+    for name, side, bud in zip(("left", "right"), (-1, 1), buds):
+        bud.location = (0, 0, 2.9)
+        bud.rotation_euler = (0, -side * .11, side * .18)
+        shot(name, set(bud.children_recursive), (206, 310), (side * -2.1, -12, 4.2), (0, 0, 2.38), 2.95)
+
+
+if "--hardware" in args:
+    render_hardware()
+    sys.exit()
+
+
 FRAME_COUNT = 20
 sample = "--sample" in args
 for mask in ((3, 0) if sample else range(4)):

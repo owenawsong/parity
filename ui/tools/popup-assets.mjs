@@ -44,6 +44,13 @@ export const popupAssets = async (buildDir, urlFor) => {
   return Object.fromEntries(entries);
 };
 
+export async function bundledHardware(dir, urlFor) {
+  const parts = { left: 'left', right: 'right', case: 'case', caseCharging: 'case-charging' };
+  return Object.fromEntries(await Promise.all(Object.entries(parts).map(async ([part, name]) => [
+    part, await urlFor(path.join(dir, `${name}.webp`), 'poster'),
+  ])));
+}
+
 export const appArtwork = async (buildDir, urlFor) => {
   const entries = { left: 'pro3-left', right: 'pro3-right', case: 'pro3-case', caseCharging: 'pro3-case-charging' };
   const hardware = await Promise.all(Object.entries(entries).map(async ([part, file]) => {

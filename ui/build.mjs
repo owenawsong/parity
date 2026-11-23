@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { jsxDomPlugin } from './tools/jsx-dom.mjs';
-import { appArtwork, popupAssets } from './tools/popup-assets.mjs';
+import { appArtwork, bundledHardware, popupAssets } from './tools/popup-assets.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.join(here, 'src');
@@ -25,6 +25,9 @@ const register = (file) => {
 };
 const popups = useLocalPro3 ? await popupAssets(buildDir, register) : null;
 const art = useLocalPro3 ? await appArtwork(buildDir, register) : null;
+const hardware = art?.hardware ?? (process.argv.includes('--bundled-pro3-art')
+  ? await bundledHardware(path.join(src, 'assets/parity-pro3'), register)
+  : null);
 const posters = popups ? Object.fromEntries(Object.entries(popups).map(([model, art]) => [model, art.standard.poster])) : null;
 await Promise.all([...localFiles.values()].map((file) => access(file)));
 
@@ -64,7 +67,7 @@ const result = await build({
   chunkNames: 'chunks/[name]-[hash]',
   target: ['es2022', 'chrome120'],
   define: {
-    PRO3_HOME_ART: JSON.stringify(art?.hardware ?? null),
+    PRO3_HOME_ART: JSON.stringify(hardware),
     AIRPODS_CONNECT_MOTION: JSON.stringify(art?.connections ?? null),
     PRO3_WAITING_MOTION: JSON.stringify(art?.waiting ?? null),
     AIRPODS_HOME_POSTERS: JSON.stringify(posters),

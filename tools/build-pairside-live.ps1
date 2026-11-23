@@ -39,7 +39,7 @@ if ($PackagePath) {
     $packageWeb = Join-Path $stage 'web'
     [IO.Directory]::CreateDirectory($bundle) | Out-Null
     $publishPath = Join-Path $bundle 'app'
-    $uiArgs = @("--fresh-output=$packageWeb")
+    $uiArgs = @('--bundled-pro3-art', "--fresh-output=$packageWeb")
     $publishArgs += @("-p:ParityPackageWeb=$packageWeb", '--artifacts-path', (Join-Path $stage 'artifacts'), '-p:DebugSymbols=false', '-p:DebugType=None')
 }
 
@@ -67,6 +67,7 @@ if ($PackagePath) {
     $manifest = [ordered]@{ product = 'Parity'; schema = 1; files = $files }
     [IO.File]::WriteAllText((Join-Path $bundle 'manifest.json'), ($manifest | ConvertTo-Json -Depth 4))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-pairside-desktop.ps1') -Destination (Join-Path $bundle 'Install-Parity.ps1')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-parity-desktop.ps1') -Destination (Join-Path $bundle 'Uninstall-Parity.ps1')
     $instructions = @'
 Parity for Windows x64
 

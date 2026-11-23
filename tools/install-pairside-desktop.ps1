@@ -1,8 +1,9 @@
-param([switch]$Live, [string]$StageDirectory)
+param([switch]$Live, [string]$StageDirectory, [switch]$RegisterUninstall)
 
 $ErrorActionPreference = 'Stop'
 
 $packaged = [IO.Path]::GetFileName($PSCommandPath) -eq 'Install-Parity.ps1'
+if ($RegisterUninstall -and !$packaged) { throw 'Uninstall registration requires the packaged installer.' }
 if ($packaged) {
     $Live = $true
     $source = Join-Path $PSScriptRoot 'app'
@@ -147,6 +148,24 @@ function Initialize-LiveProfile {
     }
 }
 
+function Register-ParityUninstaller {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Uninstall-Parity.ps1') -Destination $install -Force
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Destination (Join-Path $install 'parity-installed.json') -Force
+    if ($StageDirectory) { return }
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ParityDesktop'
+    New-Item -Path $key -Force | Out-Null
+    $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
+    $uninstall = Join-Path $install 'Uninstall-Parity.ps1'
+    Set-ItemProperty -LiteralPath $key -Name DisplayName -Value 'Parity'
+    Set-ItemProperty -LiteralPath $key -Name Publisher -Value 'Parity'
+    Set-ItemProperty -LiteralPath $key -Name DisplayVersion -Value (Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+    Set-ItemProperty -LiteralPath $key -Name DisplayIcon -Value $exe
+    Set-ItemProperty -LiteralPath $key -Name InstallLocation -Value $install
+    Set-ItemProperty -LiteralPath $key -Name UninstallString -Value ('"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}"' -f $powershell,$uninstall)
+    New-ItemProperty -LiteralPath $key -Name NoModify -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -LiteralPath $key -Name NoRepair -PropertyType DWord -Value 1 -Force | Out-Null
+}
+
 function New-ParityShortcut {
     $startMenu = [Environment]::GetFolderPath('Programs')
     $shell = New-Object -ComObject WScript.Shell
@@ -174,6 +193,7 @@ try {
 }
 try {
     Install-AppFiles $source $install
+    if ($RegisterUninstall) { Register-ParityUninstaller }
     if (!$StageDirectory) {
         if ($Live) { Initialize-LiveProfile }
         New-ParityShortcut

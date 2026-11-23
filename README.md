@@ -9,7 +9,7 @@
 
 [Get the Windows preview](https://github.com/owenawsong/parity/releases) · [Install](#install) · [See what works with your AirPods](#compatibility) · [Build from source](docs/development.md)
 
-**Windows Test Mode is unnecessary. Secure Boot can stay on.** The preview uses the WPods Bluetooth service and Microsoft-signed USB/IP driver, both installed by [WPods Setup](https://github.com/FPNDev/wpods#what-setup-changes).
+**Windows Test Mode is unnecessary. Secure Boot can stay on.** Parity Setup reuses the WPods Bluetooth service or opens [WPods Setup](https://github.com/FPNDev/wpods#what-setup-changes) to install it and the Microsoft-signed USB/IP driver.
 
 ## From the case to the tray
 
@@ -63,13 +63,13 @@ On AirPods Pro 3, start a recording to see your heart rate as it changes. Adjust
 
 ## Install
 
-The preview runs on **Windows 10 (version 2004 or newer) and Windows 11 on x64**. It requires the **.NET 10 Desktop Runtime (x64)** and **Microsoft Edge WebView2 Runtime**.
+The preview runs on **Windows 10 (version 2004 or newer) and Windows 11 on x64**.
 
-1. **Set up Bluetooth once.** If the WPods service is missing, run [WPods Setup](https://github.com/FPNDev/wpods#install). Pair your AirPods in Windows. Quit the WPods tray app and leave its service running.
-2. **Install the Parity preview.** Extract the Windows ZIP from [Releases](https://github.com/owenawsong/parity/releases). Open PowerShell in the extracted directory and run `.\Install-Parity.ps1`.
-3. **Open Parity from Start.** Try the tray icon or open your paired case near the PC. The installer verifies the package files and keeps existing Parity preferences when you update.
+1. Download and open **Parity Setup** from [Releases](https://github.com/owenawsong/parity/releases). Quit an open Parity window from the tray before updating.
+2. On a fresh PC, follow the WPods setup prompts to configure Bluetooth. Setup reuses an existing WPods service and installs the Microsoft desktop runtimes if they are missing. Restart if the Bluetooth setup requests it.
+3. Pair your AirPods in Windows, quit the WPods tray app, and open **Parity** from Start. Keep the WPods Bluetooth service running.
 
-To switch back to WPods, quit Parity from the tray and open WPods. If a setup issue persists, include your Windows build, Bluetooth adapter, AirPods model, and Parity version in a [compatibility report or bug report](https://github.com/owenawsong/parity/issues/new/choose).
+To remove Parity, use **Installed apps** in Windows Settings. Parity keeps your preferences and leaves the shared service in place. [Private beta checklist](docs/private-beta.md)
 
 ## Compatibility
 
@@ -90,7 +90,7 @@ To switch back to WPods, quit Parity from the tray and open WPods. If a setup is
 
 **Can I use the microphone and keep listening in stereo?** On supported hardware, the WPods route can expose an AirPods microphone alongside stereo playback. The Microphone page lets you check what Parity sees and what Windows is using for calls.
 
-**Why do the AirPods look different in the download?** The app captures on this page use the optional local AirPods artwork and example readings. The Windows ZIP ships with bundled illustrations. [Local artwork and motion tools](docs/local-artwork.md)
+**Why do the AirPods look different in the download?** The package includes original Pro 3 renders and model-specific illustrations for other pairs. Some previews use the optional local artwork and motion clips. [Local artwork and motion tools](docs/local-artwork.md)
 
 ## Development and credits
 

@@ -9,6 +9,11 @@
 }
 .wp-popup__device { --popup-reading-height: 40px; width: 100%; gap: 3px; }
 .wp-popup__artwork .wp-popup__art:is(svg) { justify-self: center; width: 100%; }
+.wp-popup__art--hardware { display: grid; align-items: center; }
+.wp-popup__hardware-buds, .wp-popup__hardware-case { position: absolute; translate: -50%; }
+.wp-popup__hardware-buds { left: 21%; width: 35%; display: flex; justify-content: space-around; align-items: center; }
+.wp-popup__hardware-buds img { width: 39%; height: auto; }
+.wp-popup__hardware-case { left: 72.7%; width: 47%; height: auto; }
 .wp-popup__offer:is([data-state='connecting'],[data-state='autoConnecting']) .wp-popup__device { opacity: 1; }
 .wp-popup__offer[data-state='failed'] .wp-popup__artwork .wp-popup__art { opacity: 1; }
 .wp-popup__reading-slot:has(> [hidden]) { display: none; }

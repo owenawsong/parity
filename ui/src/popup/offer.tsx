@@ -34,6 +34,7 @@ export const createOfferView = (o: {
   let secondary!: HTMLButtonElement;
   let art: Element = Art({ model: 'pro', class: 'wp-popup__art', forPopup: true });
   let artModel = 'pro';
+  let stillCase: HTMLImageElement | undefined;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   let previousState: Offer['state'] | null = null;
   let previousDevice: Offer['id'] | null = null;
@@ -115,15 +116,39 @@ export const createOfferView = (o: {
       }
       const model = motion?.forModel(offer.model) ?? null;
       const rotating = model ? motion : null;
-      const nextModel = rotating ? 'motion' : offer.art;
+      const pro3 = offer.model === 'AirPods Pro 3';
+      const hardware = pro3 && !rotating ? PRO3_HOME_ART : null;
+      const nextModel = rotating ? 'motion' : hardware ? 'pro3-packaged' : offer.art;
       if (nextModel !== artModel) {
         artModel = nextModel;
-        const next = rotating?.el ?? Art({ model: offer.art, class: 'wp-popup__art', forPopup: true });
+        stillCase = undefined;
+        let next: Element;
+        if (rotating) {
+          next = rotating.el;
+        } else if (hardware) {
+          const left = new Image();
+          left.src = hardware.left;
+          left.alt = '';
+          const right = new Image();
+          right.src = hardware.right;
+          right.alt = '';
+          stillCase = new Image();
+          stillCase.alt = '';
+          stillCase.className = 'wp-popup__hardware-case';
+          next = (
+            <div class="wp-popup__art wp-popup__art--hardware" role="img">
+              <div class="wp-popup__hardware-buds">{left}{right}</div>
+              {stillCase}
+            </div>
+          );
+        } else {
+          next = Art({ model: offer.art, class: 'wp-popup__art', forPopup: true });
+        }
         art.replaceWith(next);
         art = next;
       }
+      if (hardware && stillCase) setAttr(stillCase, 'src', offer.batteries.case?.charging ? hardware.caseCharging : hardware.case);
       if (!rotating) setAttr(art, 'aria-label', t(`art.${offer.art}`));
-      const pro3 = offer.model === 'AirPods Pro 3';
       motion?.show(rotating ? offer.id : null, model, offer.batteries.case?.charging === true, visible, state === 'offer' || connecting);
       setAttr(el, 'data-state', state);
       setAttr(art, 'aria-hidden', rotating ? 'true' : null);
@@ -134,7 +159,7 @@ export const createOfferView = (o: {
       const deviceName = offer.name.trim() || modelLabel || t('home.yourAirPods');
       setText(name, deviceName);
       const focus = document.hasFocus() ? document.activeElement : null;
-      batteries.update(offer.batteries, separateBatteries, !!rotating && pro3);
+      batteries.update(offer.batteries, separateBatteries, pro3 && (!!rotating || !!hardware));
       const caption = connecting ? t('popup.connecting') : state === 'connected' ? t('popup.connected') : '';
       setText(subtitle, caption);
       const wasConnecting = !connect.hidden && !showConnect && focus === connect;
