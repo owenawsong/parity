@@ -63,7 +63,7 @@ On AirPods Pro 3, start a recording to see your heart rate as it changes. Adjust
 
 ## Install
 
-The preview runs on **Windows 10 (version 2004 or newer) and Windows 11 on x64**.
+The private beta targets **Windows 11 on x64**. Windows 10 compatibility is pending verification and depends on the [supported .NET 10 Windows versions](https://learn.microsoft.com/en-us/dotnet/core/install/windows#supported-versions).
 
 1. Download and open **Parity Setup** from [Releases](https://github.com/owenawsong/parity/releases). Quit an open Parity window from the tray before updating.
 2. On a fresh PC, follow the WPods setup prompts to configure Bluetooth. Setup reuses an existing WPods service and installs the Microsoft desktop runtimes if they are missing. Restart if the Bluetooth setup requests it.
