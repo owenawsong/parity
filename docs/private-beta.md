@@ -1,6 +1,6 @@
-# Parity 0.19 private beta
+# Parity 0.19 beta checklist
 
-Use the Parity 0.19.1 x64 Setup EXE from the draft release. The desktop app installs for the current user. The optional AirPods controls install Parity’s own Bluetooth service and reuse USB/IP if already installed and verified.
+Use the Parity 0.19.1 x64 Setup EXE from the [prerelease](https://github.com/owenawsong/parity/releases/tag/v0.19.1). The desktop app installs for the current user. The optional AirPods controls install Parity’s own Bluetooth service and reuse USB/IP if already installed and verified.
 
 ## Test setups
 
@@ -31,7 +31,7 @@ Record the AirPods firmware, Bluetooth adapter name and USB hardware ID, Windows
 | Music and calls | Play music, start a call using the selected input, end the call, and check stereo playback afterward. If there is an issue, report the player's output, the call app's input, and how the route recovered. |
 | Device settings | Try an ear detection setting, stem action, or microphone side setting that the model exposes. Check the choice again after reconnecting. |
 
-Share results in a [private compatibility report](https://github.com/owenawsong/parity/issues/new?template=adapter_report.yml). When a failure needs logs, attach a short excerpt with device addresses and personal names removed. Setup writes its app-install log under `%LOCALAPPDATA%\Pairside\setup.log`.
+Share results in a [compatibility report](https://github.com/owenawsong/parity/issues/new?template=adapter_report.yml). When a failure needs logs, attach a short excerpt with device addresses and personal names removed. Setup writes its app-install log under `%LOCALAPPDATA%\Pairside\setup.log`.
 
 ## Development verification
 
