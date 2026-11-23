@@ -1,57 +1,85 @@
 # Parity
 
-[![Parity for Windows. The Overview shows AirPods Pro 3 batteries, listening modes, and Cry for Me by Magdalena Bay in Spotify.](docs/media/parity-banner.webp)](docs/media/overview.webp)
+**AirPods control for Windows.** Switch listening modes, see each battery, and control what's playing from the tray. Open Parity for on-device EQ, head-tracked spatial audio, microphone setup, and AirPods Pro 3 heart rate.
 
-<p align="center">
-  <a href="https://github.com/owenawsong/parity/releases"><strong>Windows downloads</strong></a> ·
-  <a href="#install">Setup</a> ·
-  <a href="#compatibility">AirPods compatibility</a> ·
-  <a href="docs/development.md">Build from source</a>
-</p>
+[Get the Windows preview](https://github.com/owenawsong/parity/releases) · [Installation](#install) · [AirPods compatibility](#compatibility) · [Build from source](docs/development.md)
 
-Parity brings the controls you reach for most into the Windows tray. See each earbud and the case at a glance, switch from Transparency to Noise Cancellation, and get back to what you were playing.
+**No Windows Test Mode. Secure Boot can stay on.** Parity's Bluetooth controls use the WPods service. WPods Setup handles the Microsoft-signed USB/IP driver, and PCs with the service already configured can go straight to installing Parity. [How the Bluetooth setup works](https://github.com/FPNDev/wpods#what-setup-changes)
 
-## Open the case and connect
+[![Parity Overview with rendered AirPods Pro 3, separate battery readings, listening modes, and Cry for Me by Magdalena Bay playing in Spotify.](docs/media/parity-banner.webp)](docs/media/overview.webp)
 
-Open a recognized case near your PC and use the nearby prompt to connect. Once you're connected, Overview shows the separate batteries, listening modes available on your model, and playback controls for the active media app.
+## From the tray to your AirPods
 
-A case can stop reporting after you close it. When Parity has an earlier reading, it shows the battery level with the time it was last seen.
+| When you want to… | What Parity gives you |
+| --- | --- |
+| **Get connected** | A nearby prompt when you open a recognized case, a Connect button, and optional auto-connect for paired AirPods. |
+| **Check the charge** | Separate left, right, and case readings. If the case stops reporting, you can see when Parity last heard from it. Open battery history from the dashboard and set a one-time charge alert. |
+| **Change what you hear** | Transparency, Adaptive Audio, Noise Cancellation, and Off where supported. Adjust Adaptive Audio on compatible models and control Now Playing from the same page. |
+| **See when you used them** | Connection history from the dashboard, including time connected today. |
 
-The nearby card shows one battery reading for the pair and one for the case. Turn on **Separate earbud batteries** in Settings if you want both earbud readings there too.
+## Sound
 
-<p align="center">
-  <img src="docs/media/nearby.webp" width="262" alt="Parity’s nearby connection popup with rendered AirPods Pro 3, earbud and case battery rings, and a Connect button">
-</p>
+**Tune the AirPods themselves.** Use the recommended EQ or adjust bass, midrange, and treble on compatible firmware. Where supported, configure Conversation Awareness and Personalized Volume.
 
-## Make it sound the way you want
-
-- **Listening modes and EQ.** Switch between the modes your AirPods support, adjust the Adaptive Audio balance, or tune the three-band equalizer stored on compatible AirPods.
-- **Spatial Audio on Windows.** Try Fixed or Head Tracked with an interactive speaker view. Parity renders the spatial effect on your PC and can use AirPods motion to keep the soundstage anchored as you turn.
-- **A microphone you can check before a call.** See the input level, record a sample, listen back, and adjust voice processing. The stereo microphone route depends on your AirPods model and the WPods service.
-- **Gestures and Pulse.** Practice a nod or shake, assign shortcuts, or view live heart rate and session history on AirPods Pro 3.
+**Put sound around you.** Compare Stereo, Fixed, and Head Tracked in Parity's Windows spatial renderer. See the virtual speakers, recenter the stage, adjust speaker angle, or try a sample and your own audio file. Spatial processing depends on the Windows playback route.
 
 <details>
-<summary>See the equalizer and spatial audio controls</summary>
+<summary>See the equalizer and spatial audio</summary>
 <br>
-<p align="center">
-  <img src="docs/media/sound.webp" width="46%" alt="Parity's custom equalizer with bass, midrange, and treble controls">
-  <img src="docs/media/spatial.webp" width="46%" alt="Parity's Head Tracked mode and speaker diagram">
+<p>
+  <img src="docs/media/sound.webp" width="46%" alt="Parity custom equalizer with bass, midrange, and treble controls">
+  <img src="docs/media/spatial.webp" width="46%" alt="Parity Head Tracked spatial audio with its interactive speaker view">
 </p>
+</details>
+
+## Microphone
+
+**Check your mic before the call.** See the AirPods input level, record a sample, play it back, and check which input Windows uses for calls. Supported combinations can use the AirPods microphone while keeping stereo playback. Choose the microphone side, switch between Standard, Voice Isolation, and Wide Spectrum, or select a processing model.
+
+<details>
+<summary>See the microphone workspace</summary>
+<br>
+<img src="docs/media/microphone.webp" width="500" alt="Parity Microphone page with recording input, an input meter, and microphone options">
+</details>
+
+## Controls and Pulse
+
+**Make the controls yours.** Choose which listening modes the stem cycles through. Adjust press timing and chime volume, practice head gestures, and assign nod, shake, and keyboard shortcuts.
+
+**See your heart rate on AirPods Pro 3.** View the live reading, zoom into the chart, or revisit a saved session. An optional local feed can show the latest reading in a streaming overlay or another app on the PC.
+
+<details>
+<summary>See Controls and Pulse</summary>
+<br>
+<p>
+  <img src="docs/media/controls.webp" width="46%" alt="Parity Controls page with listening modes for the stem and head gesture shortcuts">
+  <img src="docs/media/pulse.webp" width="46%" alt="Parity Pulse with a live heart-rate chart and session statistics using demonstration data">
+</p>
+</details>
+
+<details>
+<summary>More device and Windows settings</summary>
+
+- Ear detection with configurable playback resume, optimized charging on supported firmware, and options for one-ear noise cancellation.
+- A Bluetooth signal view for finding a supported nearby case when it is broadcasting.
+- Playback monitoring with a digital level meter, Windows audio routing tools, and a compact tray view.
+- Light and dark appearance, reduced motion, sidebar order, app language, and startup settings.
+
 </details>
 
 ## Install
 
-The preview requires **Windows 10 (2004 or newer) or Windows 11 on x64**, the **.NET 10 Desktop Runtime (x64)**, and the **Microsoft Edge WebView2 Runtime**. AirPods control uses the **WPods Bluetooth service and driver**.
+Parity is available as a **Windows x64 preview**. You need Windows 10 (2004 or newer) or Windows 11, the **.NET 10 Desktop Runtime (x64)**, and the **Microsoft Edge WebView2 Runtime**.
 
-1. Install and configure [WPods](https://github.com/FPNDev/wpods#install). Pair your AirPods in Windows, then quit the WPods tray app. Leave its background service running.
-2. Download the Windows x64 ZIP from [Releases](https://github.com/owenawsong/parity/releases) when a build is available and extract it.
-3. Open PowerShell in the extracted folder, run `.\Install-Parity.ps1`, and open **Parity** from Start.
+1. **Set up Bluetooth once.** If the WPods service isn't already configured, run [WPods Setup](https://github.com/FPNDev/wpods#install). Pair your AirPods in Windows, then quit the WPods tray app and leave its service running.
+2. **Install Parity.** Extract the Windows ZIP from [Releases](https://github.com/owenawsong/parity/releases) when a preview is available. Open PowerShell in that folder and run `.\Install-Parity.ps1`.
+3. **Open Parity from Start.** Use the tray icon or open the AirPods case near your PC. To switch back to WPods, quit Parity from the tray and reopen WPods.
 
-To switch back, quit Parity from the tray and reopen WPods. Both apps keep separate preferences and share the Bluetooth service.
+The README captures use the app's locally prepared AirPods artwork and demonstration device data. The downloadable preview ships with bundled illustrations.
 
 ## Compatibility
 
-**AirPods Pro 3** is the primary hardware test pair. Other model layouts and modes have been checked with simulated devices. Nearby discovery, the stereo microphone, spatial head tracking, and on-device settings also depend on your adapter, service version, model, or firmware.
+**AirPods Pro 3** is the primary pair tested with real hardware. Other model layouts and mode combinations have been checked in simulation. The controls shown depend on the model and firmware, and Bluetooth behavior can vary by Windows adapter.
 
 | AirPods family | Listening modes in Parity |
 | --- | --- |
@@ -60,15 +88,13 @@ To switch back, quit Parity from the tray and reopen WPods. Both apps keep separ
 | AirPods 4 with ANC, AirPods 5, and AirPods Max 2 | Off, Transparency, Adaptive, Noise Cancellation |
 | AirPods Pro 2 and AirPods Pro 3 | Transparency, Adaptive, Noise Cancellation. Enable Off in Advanced settings. |
 
-The screenshots show Parity with locally prepared AirPods artwork. The downloadable ZIP uses Parity’s bundled illustrations. Spatial processing depends on the selected Windows playback route. Apple hearing setup is available on supported Apple devices.
-
 ## Development and feedback
 
-[Build or preview the app](docs/development.md) or [share an issue or hardware test result](https://github.com/owenawsong/parity/issues/new/choose). Include the Parity version, AirPods model, and Windows build if you’re reporting a problem.
+[Build or preview the app](docs/development.md) or [report a bug or share a hardware result](https://github.com/owenawsong/parity/issues/new/choose). Include your Parity version, AirPods model, Windows build, and Bluetooth adapter when reporting connection problems.
 
 ## Credits and license
 
-Parity takes design inspiration from [MagicPods](https://magicpods.app/), [AirPodsDesktop](https://github.com/SpriteOvO/AirPodsDesktop), and Apple’s AirPods experience. Its Bluetooth and device-control code builds on [WPods by FPNDev](https://github.com/FPNDev/wpods).
+Parity takes design inspiration from [MagicPods](https://magicpods.app/), [AirPodsDesktop](https://github.com/SpriteOvO/AirPodsDesktop), and Apple's AirPods experience. Its Bluetooth and device-control code builds on [WPods by FPNDev](https://github.com/FPNDev/wpods).
 
 This modified version of WPods v0.4.1 (commit `0019866`) is dated **November 22, 2026** and is licensed under the [GNU General Public License v3.0](LICENSE). See the [third-party notices](THIRD-PARTY-NOTICES.txt) and [original WPods documentation](docs/wpods-upstream.md).
 
