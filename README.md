@@ -53,7 +53,7 @@ Parity renders spatial audio on the PC. Live Windows playback needs a compatible
 On AirPods Pro 3, start a recording to see your heart rate as it changes. Adjust the time window, check the session’s range and average, or open an earlier recording and inspect a specific part of it. An optional local feed supplies the latest reading to a streaming overlay or another app on the same PC.
 
 <p align="center">
-  <img src="docs/media/pulse.webp" width="440" alt="Parity Pulse with a live heart-rate graph, current BPM, and session statistics using example readings">
+  <img src="docs/media/pulse-workspace.webp" width="475" alt="Parity Pulse with a live heart-rate graph, current BPM, and session statistics using example readings">
 </p>
 
 <details>
