@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Setup)
+param([Parameter(Mandatory)][string]$Setup, [switch]$CheckUi)
 
 $ErrorActionPreference = 'Stop'
 $exe = (Get-Item -LiteralPath $Setup).FullName
@@ -38,6 +38,10 @@ $signature = Get-AuthenticodeSignature -LiteralPath $driver
 if ($signature.Status -ne 'Valid' -or ($signature.SignerCertificate.SubjectName.Format($true) -split '\r?\n') -cnotcontains 'O=Cloudyne Systems (Scheibling Consulting AB)' -or
     (Get-FileHash -LiteralPath $driver).Hash -ne '38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeCA1A2752A8518A') {
     throw 'The bundled USB/IP installer failed package verification.'
+}
+if ($CheckUi) {
+    & python (Join-Path $PSScriptRoot 'check-packaged-ui.py') $desktop
+    if ($LASTEXITCODE) { throw 'The packaged UI check failed.' }
 }
 $sentinel = Join-Path $desktop 'unmanaged.txt'
 Set-Content -LiteralPath $sentinel -Value 'Unmanaged file'

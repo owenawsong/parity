@@ -9,6 +9,7 @@ using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -125,6 +126,7 @@ internal static class Setup
 
     internal static string Install(bool bluetooth, IProgress<string> status)
     {
+        EnsureDesktopClosed();
         string temp = NewTemp();
         try
         {
@@ -173,6 +175,29 @@ internal static class Setup
             return "Parity is installed. Pair your AirPods through Windows Bluetooth and open Parity.";
         }
         finally { CleanTemp(temp); }
+    }
+
+    private static void EnsureDesktopClosed()
+    {
+        foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(DesktopExe)))
+        {
+            using (process)
+            {
+                string path;
+                try { path = process.MainModule.FileName; }
+                catch (InvalidOperationException) { continue; }
+                catch (Win32Exception) { continue; }
+                if (!String.Equals(path, DesktopExe, StringComparison.OrdinalIgnoreCase)) continue;
+                EventWaitHandle shutdown;
+                if (EventWaitHandle.TryOpenExisting(@"Local\Parity.Shutdown." + process.Id, out shutdown))
+                {
+                    using (shutdown) shutdown.Set();
+                    if (process.WaitForExit(12000)) continue;
+                }
+                if (!process.HasExited)
+                    throw new InvalidOperationException("Quit Parity from its tray menu before updating, then try again.");
+            }
+        }
     }
 
     private static string NewTemp()
@@ -293,6 +318,8 @@ internal sealed class SetupWindow : Form
     private readonly Button next = new Button();
     private readonly CheckBox bluetooth = new CheckBox();
     private readonly ProgressBar progress = new ProgressBar();
+    private readonly Label info = new Label();
+    private readonly LinkLabel settings = new LinkLabel();
     private bool busy;
     private bool installed;
 
@@ -317,21 +344,22 @@ internal sealed class SetupWindow : Form
             AutoSize=true, Margin=new Padding(0,0,0,12) };
         bluetooth.Text = "Add full AirPods controls";
         bluetooth.AutoSize = true;
-        bool hasWPods = BluetoothProvisioning.WPodsPresent;
-        bluetooth.Enabled = !hasWPods;
         bluetooth.Margin = new Padding(0, 0, 0, 6);
-        var info=new Label
+        bluetooth.CheckedChanged += delegate { RefreshInstallButton(); };
+        info.AutoSize = true;
+        info.MaximumSize = new Size(474, 0);
+        info.Margin = new Padding(0, 0, 0, 16);
+        settings.Text = "Open Installed apps";
+        settings.AutoSize = true;
+        settings.Margin = new Padding(0, 0, 0, 12);
+        settings.LinkClicked += delegate
         {
-            AutoSize=true, MaximumSize=new Size(474,0), Margin=new Padding(0,0,0,16),
-            Text=hasWPods
-                ? "You can install the desktop app now. Remove WPods through Installed apps before adding Parity's AirPods controls."
-                : "Adds a Bluetooth service and a signed USB/IP driver for listening modes, EQ and other earbud settings. Windows might briefly lose Bluetooth and may ask you to restart."
+            try { Process.Start("ms-settings:appsfeatures"); }
+            catch (Win32Exception)
+            {
+                status.Text = "Open Settings, then Apps > Installed apps to manage WPods.";
+            }
         };
-        var settings = new LinkLabel
-        {
-            Text = "Open Installed apps", Visible = hasWPods, AutoSize = true, Margin = new Padding(0, 0, 0, 12)
-        };
-        settings.LinkClicked += delegate { Process.Start("ms-settings:appsfeatures"); };
         status.Dock=DockStyle.Fill;
         status.Text="Parity installs for your Windows account.";
         status.ForeColor=SystemColors.GrayText;
@@ -340,7 +368,6 @@ internal sealed class SetupWindow : Form
         progress.Height=6;
         progress.Margin=new Padding(0,0,0,13);
         progress.Visible=false;
-        next.Text="Install";
         next.AutoSize=true;
         next.MinimumSize=new Size(112,34);
         next.Anchor=AnchorStyles.Right;
@@ -354,7 +381,28 @@ internal sealed class SetupWindow : Form
         layout.Controls.Add(next);
         Controls.Add(layout);
         AcceptButton=next;
+        RefreshBluetoothChoice();
+        Activated += delegate { RefreshBluetoothChoice(); };
         FormClosing+=delegate(object sender,FormClosingEventArgs args) { if (busy) args.Cancel=true; };
+    }
+
+    private void RefreshBluetoothChoice()
+    {
+        if (busy || installed) return;
+        bool hasWPods = BluetoothProvisioning.WPodsPresent;
+        bluetooth.Enabled = !hasWPods;
+        if (hasWPods) bluetooth.Checked = false;
+        settings.Visible = hasWPods;
+        info.Text = hasWPods
+            ? "WPods currently manages Bluetooth. Remove it in Installed apps, then return here to add Parity's AirPods controls."
+            : "Adds a Bluetooth service and a signed USB/IP driver for listening modes, EQ and other earbud settings. Windows might briefly lose Bluetooth and may ask you to restart.";
+        RefreshInstallButton();
+    }
+
+    private void RefreshInstallButton()
+    {
+        if (!busy && !installed)
+            next.Text = bluetooth.Checked ? "Install with AirPods controls" : "Install desktop only";
     }
 
     private async void Begin(object sender,EventArgs args)
@@ -366,6 +414,7 @@ internal sealed class SetupWindow : Form
             return;
         }
 
+        RefreshBluetoothChoice();
         busy=true;
         next.Enabled=false;
         bool addControls = bluetooth.Checked && bluetooth.Enabled;
@@ -382,14 +431,13 @@ internal sealed class SetupWindow : Form
         catch (Exception error)
         {
             status.Text=error.Message;
-            next.Text="Try again";
         }
         finally
         {
             busy=false;
             progress.Visible=false;
             next.Enabled=true;
-            if (!installed) bluetooth.Enabled=!BluetoothProvisioning.WPodsPresent;
+            RefreshBluetoothChoice();
         }
     }
 }

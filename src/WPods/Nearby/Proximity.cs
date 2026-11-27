@@ -7,6 +7,7 @@ namespace WPods.Nearby;
 public readonly record struct PodBatteries(Battery Left, Battery Right, Battery Case, Battery Headphone);
 
 internal readonly record struct CaseBroadcast(Battery Battery, long SeenAt, bool Direct);
+internal readonly record struct CaseBudBroadcast(Battery Left, Battery Right, long SeenAt);
 
 /// <summary>
 /// Apple Continuity Proximity Pairing advert: manufacturer payload after company ID 0x004C, 27 bytes, type 0x07.
@@ -43,15 +44,18 @@ internal static class Proximity
     }
 
     /// <summary>AirPods Pro 3 case adverts use the paired ENC_KEY, even when the earbuds are out.</summary>
-    public static bool TryReadCaseBroadcast(ReadOnlySpan<byte> data, Aes encKey, out Battery battery, out bool knownHeader)
+    public static bool TryReadCaseBroadcast(ReadOnlySpan<byte> data, Aes encKey, out PodBatteries batteries, out bool knownHeader)
     {
+        batteries = default;
+        knownHeader = false;
+        if (!IsCaseBroadcast(data)) return false;
+
         Span<byte> plain = stackalloc byte[16];
         encKey.DecryptEcb(data[3..], plain, PaddingMode.None);
 
         // Layout check for distinguishing paired keys. Bytes 6–7 vary by firmware, and 12–15 contain a counter.
         // https://github.com/stuffz/airpods/blob/main/docs/ble-research.md#case-controlled-changes
         knownHeader = plain[0] == 0x29 && plain[1] == 0x20;
-        battery = default;
         // A Pro 3 case also transmits 01 at offset 10 with its lid shut and both buds out.
         // Its meaning is unknown; keep validating the surrounding layout and all three levels.
         if (!knownHeader || plain[8] != 0 || plain[10] > 1 || plain[11] != 0 || !ValidOrAbsent(plain[3])
@@ -59,7 +63,9 @@ internal static class Proximity
         {
             return false;
         }
-        battery = FromLevel(plain[3], default);
+        // Unlike bud adverts, the case always reports left before right. An empty
+        // slot is 0xFF and must never refresh a previously seen battery level.
+        batteries = new(FromLevel(plain[4], default), FromLevel(plain[5], default), FromLevel(plain[3], default), default);
         return true;
     }
 

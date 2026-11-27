@@ -226,7 +226,9 @@ function makePlot(controls: HTMLElement, navigator: HTMLElement) {
 export const createPulse = (): Page => {
   let watching: DeviceId | null = null, selected: number | null = null;
   let request = 0, selectedRequest = 0, pageLimit = 6;
-  let pageActive = false, pending = false;
+  let pageActive = false;
+  let pendingRecording: boolean | null = null;
+  let actionTimer: number | undefined;
   let lastLibrary: PulseLibrary | null = null, lastListSelection: number | null = null, lastLabels = -1;
   let lastDrawn: PulseTrace | null = null, staleTimer: number | undefined;
   let savedTrace: PulseTrace | null = null, readFailed = false;
@@ -315,11 +317,15 @@ export const createPulse = (): Page => {
   const setWatch = (id: DeviceId | null) => {
     watching = id;
     resetTrace();
-    pending = false;
+    clearAction();
     lastLibrary = null;
     pageLimit = 6;
     store.pulseLibrary = store.pulseDetail = store.pulseLive = store.pulseWindow = null;
     post(id ? { type: 'watchPulse', id } : { type: 'watchPulse' });
+  };
+  const clearAction = () => {
+    clearTimeout(actionTimer);
+    pendingRecording = null;
   };
   const select = (key: number) => {
     if (!watching) return;
@@ -339,9 +345,13 @@ export const createPulse = (): Page => {
     (row as HTMLElement | undefined ?? startButton).focus();
   };
   const act = () => {
-    if (!watching || pending || selected !== null) return;
+    if (!watching || pendingRecording !== null || selected !== null) return;
     const recording = store.pulseLive?.id === watching && store.pulseLive.recording;
-    pending = true;
+    pendingRecording = !recording;
+    actionTimer = window.setTimeout(() => {
+      clearAction();
+      render();
+    }, 3000);
     setDisabled(startButton, true);
     post({ type: recording ? 'endPulse' : 'startPulse', id: watching });
   };
@@ -350,6 +360,7 @@ export const createPulse = (): Page => {
     <div class="wp-page wp-pulse">
       <section class="wp-pulse-card" tabindex="-1" ref={primary} aria-labelledby="pulseReadingTitle">
         <div class="wp-pulse-head">
+          <span class="wp-pulse-sensor-icon" aria-hidden="true"><Icon name="heart" /></span>
           <div class="wp-pulse-reading">
             <h2 id="pulseReadingTitle" ref={caption} />
             <div class="wp-pulse-value" ref={reading}><strong ref={value} /><span l:text="hr.unit" /></div>
@@ -445,7 +456,7 @@ export const createPulse = (): Page => {
     setAttr(primary, 'data-view', archived ? 'history' : recording ? 'live' : 'idle');
     setText(caption, t(archived ? 'pulse.saved' : recording ? 'pulse.live' : 'pulse.sensor'));
     setText(value, bpm === undefined ? dash : String(bpm));
-    setHidden(reading, idle || bpm === undefined);
+    setHidden(reading, idle);
     setText(note, archived ? trace ? sessionLabel(trace) : t(readFailed ? 'pulse.readFailed' : 'pulse.loading') :
       recording ? fresh ? '' : t('pulse.waiting') : t(ready ? 'pulse.startHint' : 'pulse.connectHint'));
     setHidden(note, !note.textContent);
@@ -503,7 +514,7 @@ export const createPulse = (): Page => {
     setHidden(back, !archived);
     setHidden(startButton, archived);
     setHidden(remove, !archived);
-    setDisabled(startButton, pending || !status || (!recording && !ready));
+    setDisabled(startButton, pendingRecording !== null || !status || (!recording && !ready));
     setText(startButton, t(recording ? 'pulse.finish' : 'pulse.start'));
     startButton.classList.toggle('wp-btn--primary', !recording);
     startButton.classList.toggle('wp-btn--secondary', recording);
@@ -539,6 +550,11 @@ export const createPulse = (): Page => {
   return { el,
     enter: () => { pageActive = true; render(); },
     leave: () => { pageActive = false; clearTimeout(staleTimer); if (watching) setWatch(null); },
-    sections: { hero: render, features: render, pulse: () => { pending = false; render(); } },
+    sections: { hero: render, features: render, pulse: render, pulseStatus: () => {
+      const status = store.pulseLive;
+      if (status?.id === watching && (status.recording === pendingRecording || status.notice === 'unavailable'))
+        clearAction();
+      render();
+    } },
   };
 };

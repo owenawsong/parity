@@ -7,10 +7,13 @@ from pathlib import Path
 import sys
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 args = sys.argv[sys.argv.index("--") + 1:]
 out = Path(args[0]).resolve()
+family = next((arg.split("=", 1)[1] for arg in args if arg.startswith("--family=")), "pro3")
+if family not in {"pro3", "pro2", "pro1", "classic", "airpods3", "airpods4", "max"}:
+    raise ValueError(f"Unknown AirPods family: {family}")
 out.mkdir(parents=True, exist_ok=True)
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -177,20 +180,31 @@ def earbud(side):
     earpiece = ellipsoid(name + " earpiece", (side*.10, 0, .13), (.68, .52, .61), white, angle)
     vent_surface(earpiece, side, root)
     attach(earpiece, root)
-    stem = shell(name + " stem", [
+    stem_sections = [
         (-1.67, .25, .23, .102), (-1.63, .32, .29, .135), (-1.56, .36, .32, .145),
         (-1.28, .37, .34, .153), (-.54, .44, .39, .177), (-.27, .49, .42, .187),
         (-.04, .45, .41, .183),
-    ], white)
+    ]
+    if family == "classic":
+        stem_sections = [(z * 1.62, w * .93, d * .93, r * .93) for z, w, d, r in stem_sections]
+    stem = shell(name + " stem", stem_sections, white)
     stem.location = (side * .28, .12, 0)
     stem.rotation_euler = (.14, -side * .22, 0)
     attach(stem, root)
-    attach(ellipsoid(name + " stem grille", (side*.615, .34, -1.56), (.117, .106, .045), steel), root)
+    stem_end = -2.63 if family == "classic" else -1.56
+    attach(ellipsoid(name + " stem grille", (side * (.84 if family == "classic" else .615), .34, stem_end),
+                     (.117, .106, .045), steel), root)
     attach(ellipsoid(name + " upper vent", (side*.42, .26, .59), (.13, .05, .13), black, (.38, 0, 0)), root)
     # Molded silicone tip around a recessed sound outlet.
-    tip_center = (-side*.59, -.12, -.045)
-    attach(ellipsoid(name + " silicone", tip_center, (.40, .375, .377), tip, (0, side * .21, 0)), root)
-    attach(ellipsoid(name + " sound outlet", (-side*.91, -.167, -.055), (.087, .215, .21), inset, (0, side * .2, 0)), root)
+    if family.startswith("pro"):
+        tip_center = (-side*.59, -.12, -.045)
+        attach(ellipsoid(name + " silicone", tip_center, (.40, .375, .377), tip, (0, side * .21, 0)), root)
+        attach(ellipsoid(name + " sound outlet", (-side*.91, -.167, -.055), (.087, .215, .21), inset, (0, side * .2, 0)), root)
+    else:
+        attach(ellipsoid(name + " molded speaker", (-side*.33, -.074, -.04), (.44, .475, .42), white,
+                         (0, side * .25, 0)), root)
+        attach(ellipsoid(name + " flush grille", (-side*.655, -.272, -.04), (.087, .19, .237), black,
+                         (0, side * .18, -side * .54)), root)
     return root
 
 
@@ -266,6 +280,50 @@ scene.view_settings.exposure = .35
 scene.render.image_settings.file_format = "PNG"
 scene.render.image_settings.color_mode = "RGBA"
 
+def headphones():
+    aluminum = material("Satin aluminum", (.77, .79, .83), .31, .58)
+    cloth = material("Woven cushion", (.52, .54, .57), .88)
+    band = material("Warm white headband", (.82, .83, .83), .46)
+    parts = set()
+    sections, circumference = 64, 20
+    verts = []
+    for i in range(sections + 1):
+        arc = math.pi * i / sections
+        for j in range(circumference):
+            angle = math.tau * j / circumference
+            radius = .11 + .10 * math.sin(arc)
+            verts.append(((2.62 + radius * math.cos(angle)) * math.cos(arc),
+                          .62 * math.sin(angle),
+                          3.04 + (3.65 + radius * math.cos(angle)) * math.sin(arc)))
+    faces = [(i * circumference + j, i * circumference + (j + 1) % circumference,
+              (i + 1) * circumference + (j + 1) % circumference, (i + 1) * circumference + j)
+             for i in range(sections) for j in range(circumference)]
+    arch = mesh_object("Cushioned mesh headband", verts, faces, band)
+    for face in arch.data.polygons:
+        face.use_smooth = True
+    parts.add(arch)
+    for side in (-1, 1):
+        parts.add(ellipsoid("Telescoping arm", (side * 2.66, .02, 3.12), (.18, .17, .93), steel,
+                            (0, side * .13, 0)))
+        cup = shell("Aluminum cup", [
+            (-.51, 1.95, 2.66, .70), (-.46, 2.16, 2.91, .80), (-.33, 2.29, 3.01, .89),
+            (.13, 2.32, 3.03, .93), (.28, 2.20, 2.94, .88), (.33, 2.07, 2.79, .83),
+        ], aluminum)
+        pad = shell("Fabric ear cushion", [
+            (-.04, 2.10, 2.84, .88), (.12, 2.19, 2.96, .94),
+            (.37, 2.15, 2.90, .92), (.49, 1.98, 2.77, .87),
+        ], cloth)
+        pad.location.z = .34
+        carve(pad, ellipsoid("Ear cushion recess", (0, 0, .89), (.72, 1.09, .56)))
+        hinge = pivot("Cup hinge")
+        attach(cup, hinge)
+        attach(pad, hinge)
+        hinge.rotation_euler = (math.radians(82), 0, side * -math.radians(27))
+        hinge.location = (side * 2.26, -.03, 1.93)
+        parts.update((cup, pad))
+    return parts
+
+
 def render_hardware():
     """Render the isolated pieces used in Parity's desktop package."""
     case_objects = set(scene.objects) - set(buds)
@@ -285,15 +343,38 @@ def render_hardware():
         scene.render.filepath = str(out / (name + ".png"))
         bpy.ops.render.render(write_still=True)
 
+    if family == "max":
+        shot("headphone", headphones(), (470, 470), (5.4, 15, 6.25), (0, 0, 3.68), 7.7)
+        return
     lid.rotation_euler.x = 0
-    shot("case", case_objects, (480, 360), (0.13, -17, 3.35), (0, 0, 2.35), 7.1)
+    if family != "pro3":
+        dimensions = {
+            "pro2": (1.00, 1.0, .96), "pro1": (1.00, 1.0, .96),
+            "classic": (.73, .92, 1.15), "airpods3": (.91, .95, .97), "airpods4": (.84, .9, .91),
+        }[family]
+        warp = Matrix.Diagonal((*dimensions, 1))
+        if family != "pro2":
+            case_objects = {piece for piece in case_objects if not piece.name.startswith("Lanyard")}
+        if family == "classic":
+            case_objects = {piece for piece in case_objects if piece.name != "Front indicator"}
+        bpy.context.view_layer.update()
+        original = {piece: piece.matrix_world.copy() for piece in case_objects if piece.type == "MESH"}
+        for piece, pose in original.items():
+            piece.matrix_world = warp @ pose
+    case_aim = (0, 0, 2.72) if family == "classic" else (0, 0, 2.35)
+    shot("case", case_objects, (480, 360), (0.13, -17, 3.65 if family == "classic" else 3.35),
+         case_aim, 7.8 if family == "classic" else 7.1)
     shader.inputs["Base Color"].default_value = (.91, .42, .043, 1)
     shader.inputs["Emission Color"].default_value = (.91, .38, .032, 1)
-    shot("case-charging", case_objects, (480, 360), (0.13, -17, 3.35), (0, 0, 2.35), 7.1)
+    if family != "classic":
+        shot("case-charging", case_objects, (480, 360), (0.13, -17, 3.35), (0, 0, 2.35), 7.1)
     for name, side, bud in zip(("left", "right"), (-1, 1), buds):
         bud.location = (0, 0, 2.9)
         bud.rotation_euler = (0, -side * .11, side * .18)
-        shot(name, set(bud.children_recursive), (206, 310), (side * -2.1, -12, 4.2), (0, 0, 2.38), 2.95)
+        if family == "classic":
+            shot(name, set(bud.children_recursive), (205, 360), (side * -2.1, -12, 3.9), (0, 0, 1.96), 3.75)
+        else:
+            shot(name, set(bud.children_recursive), (206, 310), (side * -2.1, -12, 4.2), (0, 0, 2.38), 2.95)
 
 
 if "--hardware" in args:

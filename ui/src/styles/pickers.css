@@ -1,7 +1,7 @@
 /* Keep the native combobox semantics, keyboard navigation and top-layer positioning.
    The select and its picker must both opt in to appearance:base-select. */
 @supports (appearance: base-select) {
-  .wp-page select:not([multiple]):not([size]), .wp-narrow-nav,
+  .wp-page select:not([multiple]):not([size]),
   select::picker(select) { appearance: base-select; }
 
   .wp-page select:not([multiple]):not([size]) {
@@ -21,7 +21,7 @@
   }
   .wp-page select:not([multiple]):not([size]):enabled:is(:hover,:open) { background-color: var(--fill-control-hover); }
   .wp-page select:disabled { color: var(--text-disabled); cursor: default; }
-  .wp-page select:focus-visible, .wp-narrow-nav:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .wp-page select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   select::picker-icon {
     content: ''; inline-size: 6px; block-size: 6px; flex: none; margin-inline: auto 2px;
     border: solid currentColor; border-width: 0 1.5px 1.5px 0; rotate: 45deg;

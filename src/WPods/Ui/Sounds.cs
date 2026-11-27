@@ -280,11 +280,4 @@ internal static class Sounds
 
     private sealed record Rendering(int Rate, float[] Samples);
 
-    [ComImport, Guid("F294ACFC-3146-4483-A7BF-ADDCA7C260E2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IAudioRenderClient
-    {
-        [PreserveSig] int GetBuffer(int frames, out nint data);
-        [PreserveSig] int ReleaseBuffer(int frames, int flags);
-    }
-
 }

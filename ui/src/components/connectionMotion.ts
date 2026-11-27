@@ -6,7 +6,7 @@ type Reveal = {
   source: string;
   aligned: boolean;
   cue: () => Promise<boolean>;
-  onStart: () => void;
+  onStart: (matched: boolean) => void;
   onEnd: () => void;
 };
 
@@ -75,10 +75,10 @@ export const createConnectionMotion = () => {
         setHidden(el, false);
         if (!matched) {
           fade = el.animate([{ opacity: 0 }, { opacity: 1 }], {
-            duration: 95, easing: 'ease-out',
+            duration: 115, easing: 'ease-out',
           });
         }
-        reveal.onStart();
+        reveal.onStart(matched);
       };
       if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !el.seeking) void start();
       else el.addEventListener(el.seeking ? 'seeked' : 'loadeddata', () => void start(), options);

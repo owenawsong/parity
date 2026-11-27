@@ -26,6 +26,7 @@ internal sealed class PageMessage
     public string? Theme { get; set; }
     public string? Code { get; set; }
     public int Request { get; set; }
+    public int ConnectionId { get; set; }
     public JsonElement Value { get; set; }
     public string[]? Ids { get; set; }
     public string[]? Modes { get; set; }
@@ -216,14 +217,16 @@ internal sealed class MessageWriter
     private static PodSettings Shown(DeviceState s) => s.GetPodSettings(IsChecking(s) ? s.RememberedSettings : PodSettings.None);
 
     /// <summary>The "state" value: the attached session's DeviceState, or null.</summary>
-    public static void WriteState(Utf8JsonWriter w, DeviceState? s)
+    public static void WriteState(Utf8JsonWriter w, AapSession? session)
     {
-        if (s is null)
+        if (session is null)
         {
             w.WriteNull("state");
             return;
         }
+        DeviceState s = session.State;
         w.WriteStartObject("state");
+        w.WriteNumber("connectionId", session.ConnectionId);
         WriteBatteries(w, s);
         WriteEar(w, s);
         WriteListeningMode(w, s);
@@ -390,13 +393,20 @@ internal sealed class MessageWriter
     /// for the pair (display while not attached).
     /// </summary>
     public static void WriteDevice(Utf8JsonWriter w, KnownDevice d, string conn, PodBatteries? batteries, HostSettings host,
-        PodSettings saved, bool earDetection, bool allowOff, MicSide micSide, bool? caseOpen, CaseBroadcast? caseBroadcast, CaseBatteryReading? rememberedCase = null)
+        PodSettings saved, bool earDetection, bool allowOff, MicSide micSide, bool? caseOpen, CaseBroadcast? caseBroadcast,
+        CaseBatteryReading? rememberedCase = null, CaseBudBroadcast? caseBudBroadcast = null)
     {
         AirPodsModel model = Models.FromModelNumber(d.ModelNumber) ?? Models.Unknown;
         w.WriteStartObject();
         w.WriteString("id", Mac.Format(d.Address));
         w.WriteString("name", d.Name);
         w.WriteString("model", model.Name);
+        if (d.ModelNumber is { Length: > 0 }) w.WriteString("modelNumber", d.ModelNumber);
+        if (d.FirmwareBuild is not null)
+        {
+            w.WriteString("firmwareBuild", d.FirmwareBuild);
+            w.WriteBoolean("firmwareLive", d.FirmwareLive);
+        }
         w.WriteBoolean("stereoMicSupported", model.StereoMic);
         w.WriteString("art", model.Art);
         WriteCaps(w, d.Capabilities, model.SingleBattery);
@@ -417,6 +427,14 @@ internal sealed class MessageWriter
             w.WriteBoolean("charging", reading.Battery.Status == BatteryStatus.Charging);
             w.WriteNumber("seenAt", reading.SeenAt);
             w.WriteString("source", reading.Direct ? "case" : "earbuds");
+            w.WriteEndObject();
+        }
+        if (caseBudBroadcast is { } buds)
+        {
+            w.WriteStartObject("caseBuds");
+            w.WriteNumber("seenAt", buds.SeenAt);
+            WriteBattery(w, "left", buds.Left);
+            WriteBattery(w, "right", buds.Right);
             w.WriteEndObject();
         }
         if (batteries is { } b)

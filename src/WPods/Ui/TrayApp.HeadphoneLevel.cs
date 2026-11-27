@@ -9,41 +9,54 @@ internal sealed partial class TrayApp
     private Task _headphoneLevelCompletion = Task.CompletedTask;
     private HeadphoneLevelWatch? _headphoneLevel;
 
-    private sealed class HeadphoneLevelWatch(WebPane pane, AapSession session, int request)
+    private sealed class HeadphoneLevelWatch(WebPane pane, AapSession session, int request, bool acoustic)
     {
         internal readonly WebPane Pane = pane;
         internal readonly AapSession Session = session;
         internal readonly int Request = request;
+        internal readonly bool Acoustic = acoustic;
         internal readonly CancellationTokenSource Cancel = new();
         internal HeadphoneLevel.Reading Latest = new("waiting");
         internal HeadphoneLevel.Reading? Posted;
     }
 
-    private void WatchHeadphoneLevel(WebPane pane, ulong address, int request, bool enabled)
+    private void WatchHeadphoneLevel(WebPane pane, ulong address, int request, bool enabled, bool acoustic = false)
     {
         if (!enabled)
         {
-            if (_headphoneLevel is { } current && current.Session.Address == address && current.Request == request)
+            if (_headphoneLevel is { } current && current.Session.Address == address && current.Request == request && current.Acoustic == acoustic)
                 StopHeadphoneLevel(notify: false);
             return;
         }
         if (_exiting || !MainLive || _main?.WindowState == FormWindowState.Minimized ||
             _connections.Session is not { State.Status: SessionStatus.Ready } session || session.Address != address)
         {
-            PostHeadphoneLevel(pane, address, request, new("idle"));
+            PostHeadphoneLevel(pane, address, request, new("idle"), acoustic);
             return;
         }
-        if (_headphoneLevel is { } existing && existing.Session == session && existing.Request == request) return;
+#if PARITY_OWNER_PREVIEW
+        var calibration = acoustic ? _acousticCalibration : null;
+        if (acoustic && (calibration is null || _mainCompact))
+        {
+            PostHeadphoneLevel(pane, address, request, new("idle") { AcousticStatus = "calibration" }, acoustic);
+            return;
+        }
+#endif
+        if (_headphoneLevel is { } existing && existing.Session == session && existing.Request == request && existing.Acoustic == acoustic) return;
         StopHeadphoneLevel();
 
-        var watch = new HeadphoneLevelWatch(pane, session, request);
+        var watch = new HeadphoneLevelWatch(pane, session, request, acoustic);
         _headphoneLevel = watch;
         Task previous = _headphoneLevelCompletion;
         _headphoneLevelCompletion = Task.Run(async () =>
         {
             await previous.ConfigureAwait(false);
             HeadphoneLevel.Watch(address, () => _connections.Session == session && session.State.Status == SessionStatus.Ready,
-                reading => Volatile.Write(ref watch.Latest, reading), watch.Cancel.Token);
+                reading => Volatile.Write(ref watch.Latest, reading), watch.Cancel.Token
+#if PARITY_OWNER_PREVIEW
+                , calibration
+#endif
+                );
         });
         _headphoneLevelTimer.Start();
         OnHeadphoneLevelTick(null, EventArgs.Empty);
@@ -58,7 +71,7 @@ internal sealed partial class TrayApp
         cancel.Cancel();
         // Keep the token and its wait handle alive until the native stream has closed.
         _headphoneLevelCompletion = ReleaseHeadphoneLevel(_headphoneLevelCompletion, cancel);
-        if (notify) PostHeadphoneLevel(watch.Pane, watch.Session.Address, watch.Request, new("idle"));
+        if (notify) PostHeadphoneLevel(watch.Pane, watch.Session.Address, watch.Request, new("idle"), watch.Acoustic);
     }
 
     private static async Task ReleaseHeadphoneLevel(Task completion, CancellationTokenSource cancel)
@@ -82,13 +95,26 @@ internal sealed partial class TrayApp
         }
         HeadphoneLevel.Reading status = _headphoneLevelCompletion.IsFaulted ? new("unsupported") : Volatile.Read(ref watch.Latest);
         if (status.Status == "live" ? ReferenceEquals(watch.Posted, status) : watch.Posted == status) return;
-        PostHeadphoneLevel(watch.Pane, watch.Session.Address, watch.Request, status);
+        PostHeadphoneLevel(watch.Pane, watch.Session.Address, watch.Request, status, watch.Acoustic);
         watch.Posted = status;
     }
 
-    private void PostHeadphoneLevel(WebPane pane, ulong address, int request, HeadphoneLevel.Reading status)
+    private void PostHeadphoneLevel(WebPane pane, ulong address, int request, HeadphoneLevel.Reading status, bool acoustic)
     {
         if (_main?.Pane != pane) return;
+#if PARITY_OWNER_PREVIEW
+        if (acoustic)
+        {
+            var estimate = _writer.Begin("acousticLevel");
+            estimate.WriteString("id", Mac.Format(address));
+            estimate.WriteNumber("request", request);
+            estimate.WriteString("status", status.AcousticStatus ?? status.Status);
+            if (status.LeftDba is double leftDba) estimate.WriteNumber("left", Math.Round(leftDba, 1));
+            if (status.RightDba is double rightDba) estimate.WriteNumber("right", Math.Round(rightDba, 1));
+            pane.Post(_writer.End());
+            return;
+        }
+#endif
         var writer = _writer.Begin("headphoneLevel");
         writer.WriteString("id", Mac.Format(address));
         writer.WriteNumber("request", request);

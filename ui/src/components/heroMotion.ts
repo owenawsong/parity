@@ -36,7 +36,8 @@ export function createHeroMotion() {
       previous = undefined;
       sceneKey = undefined;
     },
-    prepare(key: string, next: Scene, hero: HTMLElement, visual: HTMLElement, title: HTMLElement, actions: HTMLElement, offlineArt: HTMLElement) {
+    prepare(key: string, next: Scene, hero: HTMLElement, visual: HTMLElement, title: HTMLElement, actions: HTMLElement,
+      offlineArt: HTMLElement | null, directArrival?: HTMLElement) {
       if (key === sceneKey) return;
       const from = previous;
       previous = next;
@@ -50,7 +51,8 @@ export function createHeroMotion() {
       const titleBefore = title.getBoundingClientRect();
       const actionBefore = actions.getBoundingClientRect();
       const wasShowingVisual = !visual.hidden;
-      const settling = from === 'revealing' && next === 'connected';
+      const direct = directArrival && next === 'connected' && (from === 'nearby' || from === 'connecting');
+      const settling = direct || (from === 'revealing' && next === 'connected');
       const exitVisual = wasShowingVisual && (settling || next === 'disconnected' || next === 'failed');
       const outgoing = exitVisual ? document.createElement('div') : null;
       if (outgoing) {
@@ -85,7 +87,7 @@ export function createHeroMotion() {
         }
       }
       stop();
-      return (hint: HTMLElement, status: HTMLElement) => {
+      return (hint?: HTMLElement, status?: HTMLElement) => {
         const titleAfter = title.getBoundingClientRect();
         const actionAfter = actions.getBoundingClientRect();
         if (outgoing?.childElementCount) {
@@ -93,17 +95,21 @@ export function createHeroMotion() {
           departing = outgoing;
           const exit = play(outgoing, [
             { opacity: 1 }, { opacity: 0 },
-          ], settling ? 190 : 120);
+          ], direct ? 110 : settling ? 190 : 120);
           exit.addEventListener('finish', () => {
             outgoing.remove();
             if (departing === outgoing) departing = undefined;
           }, { once: true });
         }
-        if (next === 'disconnected' && !offlineArt.hidden) {
+        if ((next === 'disconnected' || next === 'failed') && from !== 'disconnected' && from !== 'failed' &&
+            offlineArt && !offlineArt.hidden) {
           play(offlineArt, [{ opacity: 0 }, { opacity: 1 }], 190, outgoing?.childElementCount ? 120 : 0);
         }
-        if ((!wasShowingVisual || exitVisual) && !visual.hidden) {
-          const enter = settling ? 'translateY(3px) scale(.99)' : 'translateY(8px) scale(.98)';
+        if (direct && !directArrival.hidden) {
+          play(directArrival, [{ opacity: 0 }, { opacity: 1 }], 155, outgoing?.childElementCount ? 45 : 0);
+        } else if ((!wasShowingVisual || exitVisual) && !visual.hidden) {
+          const onFilm = visual.classList.contains('wp-hero__visual--film');
+          const enter = onFilm || settling ? 'none' : 'translateY(8px)';
           play(visual, [{ opacity: 0, transform: enter },
             { opacity: 1, transform: 'none' }], 255, exitVisual && !settling ? 65 : 0);
         }
@@ -124,10 +130,10 @@ export function createHeroMotion() {
           }
         }
         const delay = outgoing ? 95 : 0;
-        if (!hint.hidden) {
+        if (hint && !hint.hidden) {
           play(hint, [{ opacity: 0, transform: 'translateY(7px)' }, { opacity: 1, transform: 'none' }], 215, delay);
         }
-        if (next !== 'revealing' && !status.classList.contains('wp-sr')) {
+        if (status && next !== 'revealing' && !status.classList.contains('wp-sr')) {
           play(status, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], 190);
         }
       };

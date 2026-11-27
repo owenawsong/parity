@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Core/Aap.cs" Link="Aap.cs" />
+    <Compile Include="../../../src/WPods/Core/AapSession.cs" Link="AapSession.cs" />
+    <Compile Include="../../../src/WPods/Core/AppIdentity.cs" Link="AppIdentity.cs" />
+    <Compile Include="../../../src/WPods/Core/CallGesture.cs" Link="CallGesture.cs" />
+    <Compile Include="../../../src/WPods/Core/DeviceState.cs" Link="DeviceState.cs" />
+    <Compile Include="../../../src/WPods/Core/HeadMotion.cs" Link="HeadMotion.cs" />
+    <Compile Include="../../../src/WPods/Core/Mac.cs" Link="Mac.cs" />
+    <Compile Include="../../../src/WPods/Core/Models.cs" Link="Models.cs" />
+  </ItemGroup>
+</Project>

@@ -15,18 +15,22 @@ internal sealed partial class TrayApp
 
     private void SendOutputRoute(ulong address)
     {
+        string? name = _playbackOutput?.Name;
+        if (AudioEndpoints.IsSpatialVirtualOutput(name)) name = Text("home.virtualOutput");
         var w = _writer.Begin("outputRoute");
         w.WriteString("id", Mac.Format(address));
 #if PAIRSIDE_LIVE
-        w.WriteString("otherOutput", _playbackOutput?.OtherOutput);
+        w.WriteString("otherOutput", _playbackOutput is { OnPair: false } ? name ?? Text("soundWorkspace.unnamedOutput") : null);
 #else
         w.WriteNull("otherOutput");
 #endif
         if (_playbackOutput is { } output)
         {
             w.WriteStartObject("defaultOutput");
-            w.WriteString("name", output.Name);
+            w.WriteString("name", name);
             if (output.OnPair is bool onPair) w.WriteBoolean("onPair", onPair);
+            if (output.Silence != AudioEndpoints.PlaybackSilence.None)
+                w.WriteString("silence", output.Silence == AudioEndpoints.PlaybackSilence.Muted ? "muted" : "zeroVolume");
             w.WriteEndObject();
         }
         else w.WriteNull("defaultOutput");
@@ -38,7 +42,7 @@ internal sealed partial class TrayApp
     private async void UsePairOutput(ulong address)
     {
         var watch = _outputRoute;
-        if (watch?.Address != address || _outputAction == "switching" || _playbackOutput is not { OtherOutput: not null } original ||
+        if (watch?.Address != address || _outputAction == "switching" || _playbackOutput is not { OnPair: false } original ||
             _connections.Session is not { State.Status: SessionStatus.Ready } session || session.Address != address) return;
         _outputAction = "switching";
         SendOutputRoute(address);
@@ -47,7 +51,8 @@ internal sealed partial class TrayApp
         var result = AudioEndpoints.PlaybackChange.Unavailable;
         try
         {
-            result = await Task.Run(() => AudioEndpoints.UsePairPlaybackAsync(address, original.Id, timeout.Token));
+            result = await Task.Run(() => AudioEndpoints.UsePairPlaybackAsync(address, original.Id,
+                () => _connections.Session == session && session.State.Status == SessionStatus.Ready, timeout.Token));
         }
         catch (OperationCanceledException) { }
         catch (Exception e) { Log.Warn("route", $"Playback switch failed ({e.GetType().Name})"); }
@@ -88,13 +93,15 @@ internal sealed partial class TrayApp
             _outputAction = "idle";
             _outputRoute = new OutputRouteWatch(address, _ui, output =>
             {
-                if (_playbackOutput?.OtherOutput != output?.OtherOutput && _outputAction == "settings") _outputAction = "idle";
+                if (output != null && output == _playbackOutput) return;
+                if (_playbackOutput?.Id != output?.Id && _outputAction == "settings") _outputAction = "idle";
                 _playbackOutput = output;
                 SendOutputRoute(address);
             });
         }
         else
         {
+            if (replay) SendOutputRoute(address);
             _outputRoute.Refresh();
         }
 #if PAIRSIDE_LIVE

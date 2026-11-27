@@ -139,43 +139,6 @@ html[data-presentation='tray'] .wp-device-home .wp-seg--icons .wp-seg__face { gr
   .wp-device-home .wp-seg__input:checked + .wp-seg__face { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
-html:not([data-presentation='tray']) .wp-device-home .wp-hero.wp-hero--offline {
-  display: flex;
-  flex: 1 0 auto;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: clamp(250px, 57vh, 420px);
-  padding: clamp(20px, 5vh, 40px) 8px;
-  gap: 0;
-  text-align: center;
-  background: transparent;
-  border: 0;
-}
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__offline-art {
-  align-self: center;
-  width: clamp(140px, 32vw, 192px);
-  min-height: 110px;
-  margin-bottom: 20px;
-}
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__id,
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__actions {
-  align-self: center;
-  max-width: 100%;
-}
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__hint {
-  border: 0;
-  padding: 0;
-  margin: 8px auto 0;
-  max-width: 33ch;
-  line-height: 1.5;
-  text-wrap: balance;
-}
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__actions { margin-top: 18px; }
-html:not([data-presentation='tray']) .wp-hero--offline .wp-devswitch__name { text-align: center; }
-html:not([data-presentation='tray']) .wp-device-home .wp-hero--offline .wp-hero__id { align-items: center; }
-html:not([data-presentation='tray']) .wp-hero--offline .wp-hero__switch > .wp-menu { inset-inline-start: 50%; translate: -50% 0; }
-
 /* The resting overview shares one surface with the listening controls. The
    reveal keeps its registered stage until both the film and handoff finish. */
 html:not([data-presentation='tray']) .wp-device-home:has(.wp-hero--controls) {
@@ -370,6 +333,11 @@ html[data-presentation='tray'] .wp-device-home .wp-adaptive-strength { padding-t
 /* Use a shared image baseline. The shorter earbuds sit inside the same art
    row as the case, so a stale case label cannot move either earbud. */
 .wp-device-home .wp-batteries--art .wp-battery__art { box-sizing: border-box; }
+.wp-device-home .wp-batteries.wp-batteries--art.wp-batteries--headphone {
+  grid-template-columns: 1fr;
+  max-width: 176px;
+  margin-inline: auto;
+}
 .wp-device-home .wp-batteries--art .wp-battery:is([data-part='left'], [data-part='right']) .wp-battery__art {
   padding-block: clamp(7px, 1.45vh, 12px);
 }
@@ -459,11 +427,12 @@ html[data-presentation='tray'] .wp-overview-balance-slot { display: none; }
   translate: 0 -50%;
   width: 13px;
   height: 13px;
+  box-sizing: border-box;
   border: 1px solid var(--text-secondary);
   border-radius: 50%;
 }
-.wp-mode-balance__track::before { inset-inline-start: 8%; border-style: dotted; }
-.wp-mode-balance__track::after { inset-inline-end: 8%; }
+.wp-mode-balance__track::before { inset-inline-start: calc((var(--balance-handle) - 13px) / 2); border-style: dotted; }
+.wp-mode-balance__track::after { inset-inline-end: calc((var(--balance-handle) - 13px) / 2); }
 .wp-mode-balance__input {
   position: absolute;
   inset: 0;

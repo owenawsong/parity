@@ -1,7 +1,7 @@
 import { setAttr, setHidden, setText } from '../dom';
 import { labelsVersion, t } from '../i18n';
 import { Icon } from '../icons';
-import type { Batteries, Battery, CaseBatteryBroadcast, CaseBatteryReading, DeviceId } from '../protocol';
+import type { Batteries, Battery, CaseBatteryBroadcast, CaseBatteryReading, CaseBudBroadcast, DeviceId } from '../protocol';
 
 type Part = 'left' | 'right' | 'case' | 'max';
 type Unavailable = 'stale' | 'unknown';
@@ -15,10 +15,11 @@ type BatteryReadings = {
   update: (
     bat: Batteries | null,
     ears: { left: string; right: string },
-    art?: { left: string; right: string; case: string; caseCharging: string } | null,
+    art?: HardwareArtwork | null,
     caseDevice?: DeviceId,
     broadcast?: CaseBatteryBroadcast,
     rememberedCase?: CaseBatteryReading,
+    caseBuds?: CaseBudBroadcast,
   ) => boolean;
   pause: () => void;
   partElement: (part: Part) => HTMLElement;
@@ -96,7 +97,8 @@ const createReading = (part: Part, parent: HTMLElement, open?: (part: Part) => v
       const source = broadcast ? t(`battery.source.${broadcast.source}`) : null;
       const title = broadcast && source ? `${source} · ${caseAge(broadcast.seenAt).timestamp}` : age?.timestamp;
       const detail = unavailable === 'unknown' ? t('battery.openLid') : title ?? null;
-      setAttr(el, open ? 'aria-description' : 'title', detail);
+      setAttr(el, 'title', detail);
+      if (open) setAttr(el, 'aria-description', detail);
       setHidden(reading, !showReading);
       if (!showReading) {
         setAttr(el, 'aria-label', art ? t(`battery.${part}`) : null);
@@ -118,7 +120,7 @@ const createReading = (part: Part, parent: HTMLElement, open?: (part: Part) => v
       setHidden(bolt, !charging);
       const name = t(`battery.${part}`);
       setText(pct, percent === undefined ? '—' : t('battery.pct', { pct: percent }));
-      setText(label, unavailable === 'unknown' ? t('battery.openCase') : age ? t('battery.caseLastSeen', { age: age.short }) : broadcast?.source === 'case' ? t('battery.liveCase') : name);
+      setText(label, unavailable === 'unknown' ? t('battery.openCase') : age ? t('battery.caseLastSeen', { age: age.short }) : part === 'case' && broadcast?.source === 'case' ? t('battery.liveCase') : name);
       let sr = percent === undefined
         ? t('battery.unavailable', { part: name })
         : t('battery.sr', { part: name, pct: percent });
@@ -153,11 +155,18 @@ export const createBatteries = (open?: (part: Part) => void): BatteryReadings =>
     el,
     pause,
     partElement: part => ({left, right, case:box, max})[part].el,
-    update: (bat, ears, art, caseDevice, broadcast, rememberedCase) => {
+    update: (bat, ears, art, caseDevice, broadcast, rememberedCase, caseBuds) => {
       pause();
       el.classList.toggle('wp-batteries--art', Boolean(art));
-      left.update(bat?.left ?? null, ears.left, art?.left);
-      right.update(bat?.right ?? null, ears.right, art?.right);
+      el.classList.toggle('wp-batteries--headphone', Boolean(art?.headphone));
+      const caseBud = (part: 'left' | 'right'): CaseBatteryBroadcast | undefined => {
+        if (!caseBuds || bat?.[part]) return undefined;
+        const reading = caseBuds[part];
+        return reading ? { ...reading, seenAt: caseBuds.seenAt, source: 'case' } : undefined;
+      };
+      const leftFromCase = caseBud('left'), rightFromCase = caseBud('right');
+      left.update(bat?.left ?? leftFromCase ?? null, leftFromCase ? '' : ears.left, art?.left, undefined, undefined, leftFromCase);
+      right.update(bat?.right ?? rightFromCase ?? null, rightFromCase ? '' : ears.right, art?.right, undefined, undefined, rightFromCase);
       const reportedCase = bat?.case ?? null;
       let cachedCase = caseDevice === undefined ? undefined : lastCase.get(caseDevice);
       for (const sample of [rememberedCase, bat?.lastCase, broadcast]) {
@@ -179,16 +188,16 @@ export const createBatteries = (open?: (part: Part) => void): BatteryReadings =>
         const age = seen ? caseAge(seen.seenAt) : undefined;
         const availability = caseDevice === undefined || live ? undefined : seen ? 'stale' : 'unknown';
         const value = live ?? (seen ? { pct: seen.pct, charging: false } : null);
-        box.update(value, '', live?.charging ? art?.caseCharging : art?.case, availability, age, live && useBroadcast ? broadcast : undefined);
+        box.update(value, '', live?.charging ? art?.caseCharging ?? art?.case : art?.case, availability, age, live && useBroadcast ? broadcast : undefined);
         const refreshAfter = live ? remaining : age?.refreshAfter;
         if (refreshAfter && !document.body.classList.contains('is-hidden')) {
           timer = window.setTimeout(refreshCase, refreshAfter);
         }
       };
       refreshCase();
-      max.update(bat?.headphone ?? null, '');
+      max.update(bat?.headphone ?? null, '', art?.headphone);
 
-      return Boolean(art || caseDevice !== undefined || (bat && (bat.left ?? bat.right ?? bat.case ?? bat.headphone)));
+      return Boolean(art || caseDevice !== undefined || leftFromCase || rightFromCase || (bat && (bat.left ?? bat.right ?? bat.case ?? bat.headphone)));
     },
   };
 };

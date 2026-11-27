@@ -22,6 +22,7 @@ export type NowPlayingMedia = {
 export type Battery = { pct: number; charging: boolean } | null;
 export type CaseBatteryReading = { pct: number; seenAt: number };
 export type CaseBatteryBroadcast = CaseBatteryReading & { charging: boolean; source: 'case' | 'earbuds' };
+export type CaseBudBroadcast = { left: Battery; right: Battery; seenAt: number };
 export type Batteries = {
   left: Battery;
   right: Battery;
@@ -49,10 +50,36 @@ export type Capability =
   | 'heartRate'
   | 'sleepDetection'
   | 'singleBattery';
+export type ConnectionEvent = {
+  kind: 'linkUp' | 'linkDown' | 'controlsOpening' | 'controlsReady' | 'controlsUnavailable' |
+    'controlsClosed' | 'handshakeTimedOut' | 'retriesExhausted' |
+    'trackingReady' | 'motionMissing' | 'calibrationTimedOut' | 'motionInterrupted';
+  time: number;
+  ageSeconds: number;
+  count: number;
+};
+export type ConnectionCheck = {
+  type: 'connectionCheck';
+  request: number;
+  service: 'restart' | 'running' | 'native' | 'offline' | 'appOnly' | 'conflict' | 'missingBridge' | 'unsupported' | 'noAdapter' | 'checking';
+  serviceVersion: string;
+  connected: boolean;
+  discovery?: 'pairFirst' | 'connectFirst' | 'watching' | 'legacy' | 'waiting';
+  knownEndpoints: boolean;
+  playback: string | null;
+  callInput: string | null;
+  callOutput: string | null;
+  endpoints?: { playback: boolean; callInput: boolean; callOutput: boolean };
+  callMuted?: boolean;
+  spatialDevice?: boolean;
+  virtualDefaultOutsideParity?: boolean;
+  events?: ConnectionEvent[];
+};
 export type Conn =
   | 'connected'
   | 'connecting'
   | 'reconnecting'
+  | 'available'
   | 'notConnected'
   | 'elsewhere'
   | 'attachFailed';
@@ -94,6 +121,9 @@ export type Device = {
   id: DeviceId;
   name: string;
   model: string;
+  modelNumber?: string;
+  firmwareBuild?: string;
+  firmwareLive?: boolean;
   art: Art;
   stereoMicSupported?: boolean;
   caps: Capability[];
@@ -103,6 +133,7 @@ export type Device = {
   batteries: Batteries | null;
   rememberedCase?: CaseBatteryReading;
   caseBroadcast?: CaseBatteryBroadcast;
+  caseBuds?: CaseBudBroadcast;
   host: HostSettings;
   stemModes: StemMode[];
   saved: Saved;
@@ -132,6 +163,7 @@ type Settings = {
 };
 type Saved = Settings & { listeningMode: ListeningMode | null };
 export type State = Settings & {
+  connectionId?: number;
   battery: Batteries;
   ear: EarState;
   listeningMode: ListeningMode | null;
@@ -147,11 +179,12 @@ export type State = Settings & {
   ready: boolean;
 };
 export type OnboardEq = { enabled: boolean; low: number; mid: number; high: number };
-export type EqResult = { id: DeviceId; request: number; status: 'confirmed' | 'unconfirmed' | 'different' | 'failed' };
+export type EqResult = { id: DeviceId; request: number; status: 'sent' | 'failed' };
 export type SpatialSource = 'windowsMix' | 'spotify' | 'mediaPlayer' | 'vlc' | 'appleMusic' | `app-${string}`;
 export type SpotifyMode = 'stereo' | 'fixed' | 'tracked';
 export type SpatialLevel = 'soft' | 'matched' | 'boost';
 export type SpotifySpatialStatus = 'idle' | 'starting' | 'playing' | 'waiting' | 'calibrating' | 'noMotion' | 'trackingMic' |
+  'trackingWear' | 'recoveringMotion' |
   'ended' | 'callPaused' | 'reconnectingAudio' | 'outputChanged' | 'unavailable' | 'noOutput' | 'noPlayer' | 'usePairDefault' | 'virtualBusy' | 'noVirtual' | 'failed' | 'restore';
 export type HeadMotionStatus = 'waiting' | 'calibrating' | 'ready' | 'stopped' | 'noSignal' | 'finished' |
   'unavailable' | 'signalLost' | 'spatialBusy' | 'paused' | 'playing' | 'dismissed' | 'noPlayback';
@@ -162,7 +195,7 @@ export type HeadMotion = {
   id: DeviceId; status: HeadMotionStatus; samples: number; gesture: 'nod' | 'shake' | null;
   mediaResult?: 'transparency' | 'noiseCancellation' | 'modeUnavailable' | 'playing' | 'paused' | 'skipped' | 'previous' | 'previousUnavailable' | 'actionUnavailable' | 'nextUnavailable' | 'noPlayback' | null;
   // Practice detector displacements from neutral. Positive pitch means chin up.
-  playback: boolean; count: number; pitch: number; yaw: number;
+  playback: boolean; practicing?: boolean; count: number; pitch: number; yaw: number;
 };
 export type ToggleName =
   | 'earDetection'
@@ -219,7 +252,13 @@ export type Offer = {
 };
 
 type Labels = { labels: Record<string, string>; lang: string; rtl: boolean };
-type LayoutPrefs = { popupSeparateBatteries?: boolean; reduceMotion?: boolean; sidebarOrder?: string[]; autoConnectDevices?: DeviceId[] };
+type LayoutPrefs = {
+  popupSeparateBatteries?: boolean;
+  reduceMotion?: boolean;
+  sidebarOrder?: string[];
+  autoConnectDevices?: DeviceId[];
+  maxFinishes?: Record<DeviceId, string>;
+};
 type Prefs = LayoutPrefs & {
   theme: Theme;
   useAccent: boolean;
@@ -321,7 +360,14 @@ type MainInit = { type: 'init' } & Partial<GestureBindings> & Labels &
     hotkeys: Hotkeys;
   };
 
-export type MicSetup = {
+type MicSignal = {
+  callsDb?: number | null;
+  captureDb?: number | null;
+  capturedMs: number;
+  targetDb?: number | null;
+  listenDb?: number | null;
+};
+export type MicSetup = MicSignal & {
   watchRequest?: number;
   input: string | null;
   callsOutput?: string | null;
@@ -329,9 +375,6 @@ export type MicSetup = {
   callsInput: string | null;
   callsId: string | null;
   targetId: string | null;
-  callsDb?: number;
-  captureDb?: number;
-  capturedMs: number;
   settingDefault: boolean;
   routeError: string | null;
   output: string | null;
@@ -340,24 +383,24 @@ export type MicSetup = {
   defaultCalls: boolean;
   callsMuted: boolean;
   targetMuted?: boolean;
-  targetDb?: number;
-  peakDb: number | null;
-  listenDb?: number | null;
   listenStatus?: 'starting' | 'earbuds' | 'waiting' | 'mixer' | 'unavailable' | null;
   fault: string | null;
   canMonitor: boolean;
   monitoring: string | null;
   sources: { id: string; name: string }[];
+  sampleOutputs?: { id: string; name: string }[];
 };
 export type MicCheck = {
   request: number;
   status: 'idle' | 'recording' | 'finishing' | 'ready' | 'silent' | 'routeSilent' | 'muted' | 'disconnected' | 'inputChanged' | 'clipped' | 'quiet' | 'busy' | 'unavailable' | 'denied' | 'failed' | 'tooShort' | 'noFrames';
   endpoint?: string;
   wave?: string;
+  sample?: boolean;
   durationMs?: number;
   peakDb?: number;
   envelope?: number[];
 };
+export type MicSamplePlayback = { request: number; revision: number; positionMs: number; playing: boolean; failed: boolean };
 export type CaseSignal = { id: DeviceId; dbm: number | null; age: number | null; source?: 'case' | 'earbuds'; trend?: 'stronger' | 'weaker' };
 type AdaptiveStrengthReply = { id: DeviceId; request: number; status: 'confirmed' | 'unconfirmed' | 'failed' | 'different' };
 export type AdaptiveStrengthResult =
@@ -391,6 +434,19 @@ export type HeadphoneLevel = {
   averageDb?: number;
   signalDb?: number;
 };
+export type AcousticLevel = {
+  type: 'acousticLevel'; id: DeviceId; request: number; left?: number; right?: number;
+  status: 'idle' | 'waiting' | 'unsupported' | 'route' | 'calibration' | 'volume' | 'muted' | 'gainChanged' | 'signal' | 'range' | 'estimate';
+};
+export type AcousticCalibration = {
+  type: 'acousticCalibration'; status: 'cancelled' | 'loaded' | 'rejected';
+  referencePlane?: 'ear-simulator' | 'diffuse-field-corrected'; worstHoldoutDb?: number;
+};
+export type PcEqState = {
+  type: 'pcEq'; id: DeviceId; bands: number[]; enabled: boolean; flat: boolean;
+  presets: { name: string; bands: number[] }[]; request?: number; presetRejected?: boolean;
+  scope?: SpatialSource;
+};
 export type BatteryPart = 'left' | 'right' | 'case' | 'max';
 export type BatteryPoint = {
   at: number; pct: number; low: number; high: number;
@@ -411,20 +467,22 @@ export type HostToMain =
   | AppleHeadphoneHistory
   | ({ type: 'gestureBindings' } & GestureBindings)
   | PulseLive | PulseLibrary | PulseDetail | PulseWindow
-  | HeadphoneLevel
-  | { type: 'connectionCheck'; request: number; service: 'restart' | 'running' | 'native' | 'offline' | 'appOnly' | 'conflict' | 'missingBridge' | 'unsupported' | 'noAdapter' | 'checking'; serviceVersion: string; connected: boolean; discovery?: 'pairFirst' | 'connectFirst' | 'watching' | 'legacy' | 'waiting'; knownEndpoints: boolean; playback: string | null; callInput: string | null; callOutput: string | null; callMuted?: boolean; spatialDevice?: boolean; virtualDefaultOutsideParity?: boolean }
+  | HeadphoneLevel | AcousticLevel | AcousticCalibration | PcEqState
+  | ConnectionCheck
   | ({ type: 'connectionActivity' } & ConnectionActivity)
   | { type: 'mediaTimeline'; id: string; trackId: string; timeline: MediaTimeline | null }
-  | { type: 'outputRoute'; id: DeviceId; otherOutput: string | null; defaultOutput: { name: string | null; onPair?: boolean } | null; action?: 'idle' | 'switching' | 'settings' }
+  | { type: 'outputRoute'; id: DeviceId; otherOutput: string | null; defaultOutput: { name: string | null; onPair?: boolean; silence?: 'muted' | 'zeroVolume' } | null; action?: 'idle' | 'switching' | 'settings' }
   | { type: 'nowPlaying'; media: NowPlayingMedia | null; unavailable?: boolean }
   | ({ type: 'micSetup' } & MicSetup)
+  | ({ type: 'micSignal'; watchRequest: number } & MicSignal)
   | ({ type: 'micCheck' } & MicCheck)
+  | ({ type: 'micSamplePlayback' } & MicSamplePlayback)
   | ({ type: 'caseSignal' } & CaseSignal)
   | ({ type: 'onboardEqResult' } & EqResult)
   | { type: 'spotifyLevels'; id: DeviceId; left: number; right: number }
   | { type: 'spotifyPose'; id: DeviceId; yaw: number; pitch: number }
   | { type: 'spotifyOutput'; source: SpatialSource; id: DeviceId; name: string | null; onPair?: boolean }
-  | { type: 'spotifySpatial'; source: SpatialSource; startingMode?: Exclude<SpotifyMode, 'stereo'>; resumeMode?: Exclude<SpotifyMode, 'stereo'>; resumeReason?: 'callPaused' | 'reconnectingAudio'; speakerAngle?: 20 | 30 | 55; level?: SpatialLevel; apps?: { key: SpatialSource; name: string }[]; paths?: { key?: SpatialSource; app: string; output: string; path: 'spatial' | 'direct' | 'other' }[]; id: DeviceId | null; mode: SpotifyMode; status: SpotifySpatialStatus }
+  | { type: 'spotifySpatial'; source: SpatialSource; startingMode?: SpotifyMode; resumeMode?: SpotifyMode; resumeReason?: 'callPaused' | 'reconnectingAudio'; speakerAngle?: 20 | 30 | 55; level?: SpatialLevel; apps?: { key: SpatialSource; name: string }[]; paths?: { key?: SpatialSource; app: string; output: string; path: 'spatial' | 'direct' | 'other' }[]; id: DeviceId | null; mode: SpotifyMode; status: SpotifySpatialStatus; routed?: boolean; pcEqEnabled?: boolean; pcEqPlaying?: boolean; profileId?: DeviceId; rememberedSources?: SpatialSource[]; savedMode?: SpotifyMode; savedEqualizer?: boolean }
   | { type: 'windowsSpatial'; id: DeviceId; request: number; provider: 'off' | 'sonic' | 'dolbyHeadphones' | 'dolbyTheater' | 'dtsHeadphones' | 'other' | 'unsupported' | 'unknown' | null }
   | { type: 'spatialPose'; id: DeviceId; request: number; status: HeadMotionStatus; yaw: number; pitch: number; roll?: number }
   | ({ type: 'headMotion' } & HeadMotion)
@@ -438,7 +496,7 @@ export type HostToMain =
   | { type: 'battery'; battery: Batteries }
   | { type: 'ear'; ear: EarState }
   | { type: 'listeningMode'; listeningMode: ListeningMode | null; listeningModePending?: boolean; id?: DeviceId; request?: number }
-  | { type: 'settings'; settings: Partial<Settings & Pick<State, 'onboardEq' | 'adaptiveVolumeReported' | 'callMutePresses' | 'optimizedCharging'>> }
+  | { type: 'settings'; id?: DeviceId; settings: Partial<Settings & Pick<State, 'onboardEq' | 'adaptiveVolumeReported' | 'callMutePresses' | 'optimizedCharging'>> }
   | { type: 'heartRate'; heartRate: HeartRate; heartRateBpm: number | null }
   | { type: 'caps'; caps: Capability[] }
   | { type: 'checking'; checking: boolean; ready: boolean }
@@ -474,6 +532,8 @@ export type MainToHost =
   | { type: 'importAppleHeadphoneHistory' | 'cancelAppleHeadphoneImport' | 'clearAppleHeadphoneHistory' }
   | { type: 'watchPulse'; id?: DeviceId }
   | { type: 'watchHeadphoneLevel'; value: boolean; id: DeviceId; request: number }
+  | { type: 'watchAcousticLevel'; value: boolean; id: DeviceId; request: number }
+  | { type: 'importAcousticCalibration' }
   | { type: 'setAutomaticPulse'; id: DeviceId; value: boolean }
   | { type: 'setPulseChart'; id: DeviceId; name: 'window'; value: number }
   | { type: 'setPulseChart'; id: DeviceId; name: 'scale'; value: boolean }
@@ -486,6 +546,7 @@ export type MainToHost =
   | { type: 'recordMicCheck'; id: string; name: 'calls' | 'airpods'; request: number }
   | { type: 'useAirPodsForCalls'; id: string }
   | { type: 'finishMicCheck' | 'cancelMicCheck'; request: number }
+  | { type: 'setMicSamplePlayback'; request: number; name: 'play' | 'pause'; positionMs: number; value: number; id?: string }
   | { type: 'openMicrophonePrivacy' }
   | { type: 'startListenMonitor' | 'setListenVolume'; id: string; value: number }
   | { type: 'stopListenMonitor' }
@@ -523,18 +584,24 @@ export type MainToHost =
   | { type: 'setHoldDuration'; value: HoldDuration }
   | { type: 'setToneVolume'; value: number }
   | { type: 'setAdaptiveStrength'; id: DeviceId; request: number; value: number }
-  | { type: 'setOnboardEq' | 'previewOnboardEq'; id: DeviceId; request: number; value: OnboardEq }
+  | { type: 'setOnboardEq' | 'previewOnboardEq'; id: DeviceId; connectionId: number; request: number; value: OnboardEq }
   | { type: 'setGestureBinding'; name: 'nod' | 'shake'; value: GestureAction }
   | { type: 'setGestureSensitivity'; value: GestureSensitivity }
   | { type: 'startHeadMotion'; id: DeviceId; name?: 'playback' }
   | { type: 'readWindowsSpatial' | 'openWindowsSpatial'; id: DeviceId; request: number }
-  | { type: 'watchSpotifyRoom'; id: DeviceId | null }
-  | { type: 'setSpatialPlayer'; name: SpatialSource }
-  | { type: 'readConnectionCheck'; request: number }
+  | { type: 'watchSpotifyRoom'; id: DeviceId | null; value: boolean }
+  | { type: 'setSpatialPlayer'; name: SpatialSource; id?: DeviceId }
+  | { type: 'rememberAppSound'; name: SpatialSource; id: DeviceId; value: boolean }
+  | { type: 'recallAppSound'; name: SpatialSource; id: DeviceId }
+  | { type: 'readConnectionCheck'; request: number; id: DeviceId | null }
   | { type: 'setSpeakerAngle'; value: 20 | 30 | 55 }
   | { type: 'setSpatialLevel'; name: SpatialLevel }
   | { type: 'testSpatialSpeakers'; id: DeviceId }
   | { type: 'spotifySpatialMode'; id: DeviceId; name: SpotifyMode }
+  | { type: 'readPcEq'; id: DeviceId }
+  | { type: 'returnToDirectPlayback'; id: DeviceId }
+  | { type: 'setPcEqEnabled' | 'comparePcEq'; id: DeviceId; value: boolean }
+  | { type: 'previewPcEq' | 'savePcEq' | 'savePcEqPreset'; id: DeviceId; value: number[]; request?: number; name?: string; code?: SpatialSource }
   | { type: 'spotifySpatialCenter'; id: DeviceId }
   | { type: 'startSpatialMotion' | 'stopSpatialMotion' | 'centerSpatialMotion'; id: DeviceId; request: number }
   | { type: 'stopHeadMotion' }
@@ -562,6 +629,7 @@ export type MainToHost =
   | { type: 'setPopupSeparateBatteries'; value: boolean }
   | { type: 'setSidebarOrder'; ids: string[] }
   | { type: 'setNearbyAutoConnect'; id: DeviceId; value: boolean }
+  | { type: 'setMaxFinish'; id: DeviceId; value: string }
   | { type: 'restoreWindowSize' }
   | { type: 'setTheme'; theme: Theme }
   | { type: 'setLanguage'; code: string }

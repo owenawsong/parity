@@ -14,6 +14,7 @@ export const createHeadGestures = (ctx: Ctx) => {
   let feedback!: HTMLParagraphElement;
   let practice!: HTMLButtonElement;
   let stopping = false;
+  let stoppingPractice = false;
   let stage!: HTMLDivElement;
   let sessionPanel!: HTMLDivElement;
   let sessionTitle!: HTMLElement;
@@ -43,13 +44,16 @@ export const createHeadGestures = (ctx: Ctx) => {
   const start = (playback: boolean) => {
     const d = current();
     if (!d || !live(d)?.ready) return;
-    store.headMotion = { id: d.id, status: 'waiting', samples: 0, gesture: null, playback, count: 0, pitch: 0, yaw: 0 };
+    const shortcuts = store.headMotion?.id === d.id && store.headMotion.playback;
+    store.headMotion = { id: d.id, status: 'waiting', samples: 0, gesture: null,
+      playback: playback || !!shortcuts, practicing: !playback, count: 0, pitch: 0, yaw: 0 };
     post({ type: 'startHeadMotion', id: d.id, name: playback ? 'playback' : undefined });
     ctx.update('features');
   };
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    stoppingPractice = sessionPanel.hasAttribute('data-practicing');
     post({ type: 'stopHeadMotion' });
     ctx.update('gesture');
   };
@@ -125,13 +129,14 @@ export const createHeadGestures = (ctx: Ctx) => {
     const head = store.headMotion?.id === d.id && ready ? store.headMotion : null;
     const active = !!head && (head.status === 'waiting' || head.status === 'calibrating' || head.status === 'ready');
     const idle = !head || head.status === 'stopped' || head.status === 'finished';
-    if (!active) stopping = false;
+    const practicing = active && (head.practicing ?? !head.playback);
+    const shortcutsActive = active && head.playback;
+    if (!active || (stoppingPractice && !practicing)) stopping = stoppingPractice = false;
     const hint = stopping ? 'hub.stopping' : !ready ? 'controls.gestureOffline' :
       !assigned && !active ? 'hub.assignGesture' : !wearing && !active ? 'hub.wearBoth'
-      : idle ? 'hub.remoteIdle' : head.status === 'ready' && head.playback ? 'hub.remoteOn'
+      : idle ? 'hub.remoteIdle' : practicing && shortcutsActive && head.status === 'ready' ? 'hub.practicePausedShortcuts'
+      : head.status === 'ready' && shortcutsActive ? 'hub.remoteOn'
       : head.status === 'spatialBusy' ? 'hub.spatialBusy' : `audioMotion.head.${head.status}` as const;
-    const practicing = active && !head.playback;
-    const shortcutsActive = active && head.playback;
     setAttr(sessionPanel, 'data-practicing', practicing ? 'true' : null);
     setHidden(sessionTitle, !active);
     if (active) setText(sessionTitle, t(practicing ? 'hub.practiceTitle' :
@@ -148,8 +153,8 @@ export const createHeadGestures = (ctx: Ctx) => {
       }
     }
     const result = head?.mediaResult;
-    const message = active && head.playback && result ? t(`hub.result.${result}`) :
-      active && !head.playback && head.gesture ? t(`audioMotion.${head.gesture}`, { count: head.count }) : '';
+    const message = practicing && head.gesture ? t(`audioMotion.${head.gesture}`, { count: head.count }) :
+      shortcutsActive && !practicing && result ? t(`hub.result.${result}`) : '';
     setText(feedback, message);
     setHidden(status, !!message);
     setHidden(feedback, !message);
@@ -165,14 +170,14 @@ export const createHeadGestures = (ctx: Ctx) => {
     setChecked(remote.input, shortcutsActive && !stopping);
     setDisabled(remote.input, !ready || practicing || stopping || (!shortcutsActive && (!wearing || !assigned)));
     setText(practice, t(practicing ? 'hub.stopPractice' : 'hub.practice'));
-    setDisabled(practice, !ready || shortcutsActive);
+    setDisabled(practice, !ready || stopping);
     setAttr(practice, 'aria-disabled', practicing && stopping ? 'true' : null);
   };
   const leave = () => {
     highlight?.cancel();
-    if (!store.headMotion?.playback && store.headMotion) {
+    if (store.headMotion && (store.headMotion.practicing || !store.headMotion.playback)) {
       post({ type: 'stopHeadMotion' });
-      store.headMotion = null;
+      if (!store.headMotion.playback) store.headMotion = null;
     }
   };
   return { el, render, leave };

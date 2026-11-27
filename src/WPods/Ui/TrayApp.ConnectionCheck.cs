@@ -9,21 +9,26 @@ internal sealed partial class TrayApp
 {
     private int _connectionCheckRevision;
 
-    private async void ReadConnectionCheck(int request)
+    private static (bool Known, T? Value) CheckAudio<T>(Func<T?> read, string subject) where T : class
     {
-        int revision = ++_connectionCheckRevision;
-        var pane = _main?.Pane;
-        AudioEndpoints.Routes? routes = null;
-        string? spatialEndpoint = null;
         try
         {
-            (routes, spatialEndpoint) = await Task.Run(() =>
-                (AudioEndpoints.ReadDefaults(), SpotifyBridge.VirtualOutputId()));
+            return (true, read());
         }
         catch (Exception e) when (e is COMException or InvalidCastException or UnauthorizedAccessException or InvalidOperationException)
         {
-            Log.Warn("diagnostics", $"Windows audio endpoint check failed: 0x{e.HResult:X8}");
+            Log.Warn("diagnostics", $"{subject} check failed: 0x{e.HResult:X8}");
+            return (false, null);
         }
+    }
+
+    private async void ReadConnectionCheck(int request, ulong address)
+    {
+        int revision = ++_connectionCheckRevision;
+        var pane = _main?.Pane;
+        var (routes, spatial) = await Task.Run(() => (
+            CheckAudio(() => AudioEndpoints.ReadDefaults(), "Windows audio endpoints").Value,
+            CheckAudio(SpotifyBridge.VirtualOutputId, "Spatial playback device")));
         if (_exiting || revision != _connectionCheckRevision || !MainLive || _main?.Pane != pane) return;
         var session = _connections.Session;
         var service = _service.Snapshot();
@@ -43,8 +48,8 @@ internal sealed partial class TrayApp
         w.WriteNumber("request", request);
         w.WriteString("service", status);
         w.WriteString("serviceVersion", service.Version);
-        w.WriteBoolean("connected", session?.State.Status == SessionStatus.Ready);
-        w.WriteString("discovery", Selected() is not { } address ? "pairFirst" :
+        w.WriteBoolean("connected", address != 0 && session?.Address == address && session.State.Status == SessionStatus.Ready);
+        w.WriteString("discovery", address == 0 ? "pairFirst" :
             Find(address)?.HasKeys != true ? "connectFirst" : _nearby.DiscoveryStatus);
         w.WriteBoolean("knownEndpoints", routes != null);
         w.WriteString("playback", routes?.Output?.Name);
@@ -53,10 +58,29 @@ internal sealed partial class TrayApp
         if (routes?.CommunicationsInput?.Muted is bool muted) w.WriteBoolean("callMuted", muted);
         if (routes != null)
         {
-            w.WriteBoolean("spatialDevice", spatialEndpoint != null);
-            w.WriteBoolean("virtualDefaultOutsideParity", WindowsSpatialMix.Same(spatialEndpoint, routes.Output?.Id) &&
-                _spotify?.App.IsWindowsMix != true && !WindowsSpatialMix.Pending);
+            // A Windows endpoint can exist even when its friendly name cannot be read.
+            w.WriteStartObject("endpoints");
+            w.WriteBoolean("playback", routes.Output != null);
+            w.WriteBoolean("callInput", routes.CommunicationsInput != null);
+            w.WriteBoolean("callOutput", routes.CommunicationsOutput != null);
+            w.WriteEndObject();
         }
+        if (spatial.Known) w.WriteBoolean("spatialDevice", spatial.Value != null);
+        if (spatial.Known && routes != null)
+            w.WriteBoolean("virtualDefaultOutsideParity", WindowsSpatialMix.Same(spatial.Value, routes.Output?.Id) &&
+                _spotify?.App.IsWindowsMix != true && !WindowsSpatialMix.Pending);
+        w.WriteStartArray("events");
+        foreach (var entry in _connections.Timeline.Read(address))
+        {
+            w.WriteStartObject();
+            string kind = entry.Kind.ToString();
+            w.WriteString("kind", char.ToLowerInvariant(kind[0]) + kind[1..]);
+            w.WriteNumber("time", entry.Time);
+            w.WriteNumber("ageSeconds", entry.AgeSeconds);
+            w.WriteNumber("count", entry.Count);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
         PostMain(_writer.End());
     }
 }

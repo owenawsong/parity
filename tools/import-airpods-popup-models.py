@@ -2,11 +2,14 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 from io import BytesIO
+from itertools import chain
 import json
 import math
 from pathlib import Path
 import plistlib
+import runpy
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
@@ -34,9 +37,21 @@ MODELS = {
     # Max 2 and Max 1 USB-C share this asset key.
     "AirPods Max 2": ("max2", "AirPodsMax1,2-v2", "Silver", "single"),
 }
+MAX_FINISHES = {
+    "space-gray": ("max-space-gray", "AirPodsMax1,1-v2", "Dark Grey", "single"),
+    "sky-blue": ("max-sky-blue", "AirPodsMax1,1-v2", "Blue", "single"),
+    "green": ("max-green", "AirPodsMax1,1-v2", "Green", "single"),
+    "pink": ("max-pink", "AirPodsMax1,1-v2", "Red", "single"),
+    "midnight": ("max-midnight", "AirPodsMax1,2-v2", "Black", "single"),
+    "blue": ("max-blue", "AirPodsMax1,2-v2", "Blue", "single"),
+    "purple": ("max-purple", "AirPodsMax1,2-v2", "Purple", "single"),
+    "orange": ("max-orange", "AirPodsMax1,2-v2", "Orange", "single"),
+}
+ARTWORK_MODELS = MODELS | {f"max:{color}": spec for color, spec in MAX_FINISHES.items()}
 SAMPLE_SIZE = 128
 MIN_ALPHA = bytes(255 if value >= 8 else 0 for value in range(256))
-CANVAS = "470:220"
+SIZE = 470, 220
+CANVAS = f"{SIZE[0]}:{SIZE[1]}"
 
 
 def run_ffmpeg(ffmpeg, *arguments):
@@ -91,7 +106,7 @@ def alpha_crop(ffmpeg, source):
     )
 
 
-def render_clip(ffmpeg, source, stage, basename, crop):
+def render_clip(ffmpeg, source, stage, basename, crop, slug, studio):
     video = f"{basename}.webm"
     poster = f"{basename}.webp"
     x, y, right, bottom = crop
@@ -102,16 +117,16 @@ def render_clip(ffmpeg, source, stage, basename, crop):
         "format=yuva420p",
         f"pad={CANVAS}:(ow-iw)/2:(oh-ih)/2:color=black@0",
     ])
-    input_args = ["-threads", "2", "-i", str(source), "-an", "-vf", filters]
-    png = run_ffmpeg(ffmpeg, *input_args, "-frames:v", "1", "-pix_fmt", "rgba",
-                     "-c:v", "png", "-f", "image2pipe", "pipe:1")
-    with Image.open(BytesIO(png)) as frame:
+    with closing(studio["read_frames"](ffmpeg, source, SIZE, filters)) as source_frames:
+        frames = (studio["light_shell"](frame, slug) for frame in source_frames)
+        first = next(frames, None)
+        if first is None:
+            raise ValueError(f"No usable frames in {source.name}")
+        frame = Image.fromarray(first)
         if frame.getchannel("A").getextrema() != (0, 255):
             raise ValueError("The rendered poster lost its alpha channel")
         frame.save(stage / poster, "WEBP", quality=94, alpha_quality=100)
-    run_ffmpeg(ffmpeg, *input_args, "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-threads", "2",
-               "-b:v", "0", "-crf", "23", "-deadline", "good", "-cpu-used", "5", "-row-mt", "1",
-               str(stage / video))
+        studio["write_clip"](ffmpeg, stage / video, SIZE, chain((first,), frames))
     rgba = run_ffmpeg(ffmpeg, "-c:v", "libvpx-vp9", "-threads", "2", "-i", str(stage / video),
                       "-frames:v", "1", "-pix_fmt", "rgba", "-c:v", "png", "-f", "image2pipe", "pipe:1")
     with Image.open(BytesIO(rgba)) as frame:
@@ -120,7 +135,7 @@ def render_clip(ffmpeg, source, stage, basename, crop):
     return {"video": video, "poster": poster}
 
 
-def import_model(ffmpeg, output, name, spec, asset):
+def import_model(ffmpeg, output, name, spec, asset, studio):
     slug, product, variant, layout = spec
     cache = output / "cache"
     entry = {"layout": layout}
@@ -164,7 +179,7 @@ def import_model(ffmpeg, output, name, spec, asset):
         )
         for role, source in sources.items():
             try:
-                rendered = render_clip(ffmpeg, source, stage, f"{slug}-{role}", crop)
+                rendered = render_clip(ffmpeg, source, stage, f"{slug}-{role}", crop, slug, studio)
                 for filename in rendered.values():
                     (stage / filename).replace(output / filename)
                 entry[role] = rendered
@@ -182,7 +197,7 @@ def main():
     parser.add_argument("--output", type=Path, default=BUILD / "airpods-popup-models")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg 9 or newer with Apple HEVC alpha decoding")
     parser.add_argument("--jobs", type=int, default=4)
-    parser.add_argument("--model", action="append", choices=MODELS, help="Import a subset of the supported models")
+    parser.add_argument("--model", action="append", choices=ARTWORK_MODELS, help="Import a subset of the artwork profiles")
     args = parser.parse_args()
 
     try:
@@ -193,17 +208,18 @@ def main():
     (args.output / "cache").mkdir(parents=True, exist_ok=True)
     index_path = args.output / "index.json"
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
-    names = args.model or MODELS
+    names = args.model or ARTWORK_MODELS
     imported = 0
+    studio = runpy.run_path(str(Path(__file__).with_name("airpods-studio.py")))
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         jobs = {}
         for name in names:
-            spec = MODELS[name]
+            spec = ARTWORK_MODELS[name]
             asset = assets.get((spec[1], spec[2]))
             if asset is None:
                 print(f"Skipped {name}: {spec[1]} {spec[2]} is absent from the Apple catalog", flush=True)
                 continue
-            jobs[pool.submit(import_model, args.ffmpeg, args.output, name, spec, asset)] = name
+            jobs[pool.submit(import_model, args.ffmpeg, args.output, name, spec, asset, studio)] = name
 
         for job in as_completed(jobs):
             name = jobs[job]

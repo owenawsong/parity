@@ -20,7 +20,7 @@
     <RootNamespace>WPods</RootNamespace>
     <Product>Parity</Product>
     <AssemblyTitle>Parity</AssemblyTitle>
-    <Version>0.19.1</Version>
+    <Version>0.19.2</Version>
     <Description>AirPods control for Windows</Description>
     <ApplicationIcon>../Pairside/Pairside.ico</ApplicationIcon>
     <ApplicationManifest>../Pairside/app.manifest</ApplicationManifest>
@@ -33,6 +33,13 @@
     <EmbeddedResource Include="Audio\kemar48.bin" LogicalName="Pairside.Kemar48" Condition="'$(PairsideLive)' == 'true'" />
     <EmbeddedResource Include="../Pairside/Pairside.ico" LogicalName="Pairside.ico" Condition="'$(PairsideLive)' == 'true'" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(PairsideLive)' == 'true' and '$(ParityOwnerPreview)' == 'true'">
+    <DefineConstants>$(DefineConstants);PARITY_OWNER_PREVIEW</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PairsideLive)' == 'true' and '$(ParityOwnerPreview)' == 'true'">
+    <Compile Include="../../tools/headphone-level/AcousticCalibration.cs" Link="Audio/AcousticCalibration.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(PairsideLive)' != 'true'">

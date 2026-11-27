@@ -1,8 +1,29 @@
 /* The artwork, identity and actions share their resting layout while a film
    plays. Keep the case on its own axis through the turn and the lift. */
 .wp-hero__visual--pro3 > :is(video.wp-connect-wait[loop], .wp-connect-turn) { translate: -50% -46.2%; }
+.wp-hero__visual--model-motion > :is(.wp-connect-wait, .wp-connect-motion) {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  width: min(100%, 360px);
+  height: var(--hero-stage-size);
+  object-fit: contain;
+  pointer-events: none;
+}
+html:not([data-presentation='tray']) .wp-hero__visual--model-motion > :is(.wp-connect-wait, .wp-connect-motion) {
+  scale: 1.12;
+}
 .wp-hero__visual--revealing:has(.wp-connect-motion:not([hidden])) > .wp-hero__art--poster {
   visibility: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .wp-hero__visual--still > .wp-hero__art--closed {
+    animation: wp-hero-art-arrive 280ms var(--ease-enter) both;
+  }
+}
+@keyframes wp-hero-art-arrive {
+  from { opacity: 0; transform: translateY(5px) scale(.97); }
+  to { opacity: 1; transform: none; }
 }
 html:not([data-presentation='tray']) .wp-device-home {
   --overview-art-height: clamp(158px, 34dvh, 208px);
@@ -50,6 +71,38 @@ html[data-presentation='tray'] .wp-device-home .wp-hero__visual--film {
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.wp-hero__visual--headphones, .wp-owner-overview--headphones {
+  --headphone-stage: clamp(182px, 43dvh, 284px);
+}
+html[data-presentation='tray'] .wp-hero__visual--headphones { --headphone-stage: 164px; }
+.wp-device-home .wp-hero__visual--headphones.wp-hero__visual--model-motion.wp-hero__visual--film {
+  --hero-stage-size: var(--headphone-stage);
+  height: var(--hero-stage-size);
+  min-block-size: var(--hero-stage-size);
+  padding: 0;
+}
+html:not([data-presentation='tray']) .wp-device-home .wp-hero--discovery > .wp-hero__visual--headphones.wp-hero__visual--film {
+  --hero-stage-size: var(--headphone-stage);
+}
+html .wp-hero__visual--headphones.wp-hero__visual--model-motion > :is(.wp-connect-wait, .wp-connect-motion) {
+  width: min(100%, 308px);
+  scale: none;
+}
+.wp-device-home .wp-hero__visual--headphones .wp-batteries.wp-batteries--headphone,
+.wp-device-home.wp-owner-overview--headphones .wp-batteries.wp-batteries--headphone {
+  width: min(100%, 260px);
+  max-width: 100%;
+  padding-block-start: calc(var(--headphone-stage) * .1125);
+}
+.wp-device-home .wp-hero__visual--headphones .wp-battery[data-part='max'] .wp-battery__art,
+.wp-device-home.wp-owner-overview--headphones .wp-battery[data-part='max'] .wp-battery__art {
+  width: 100%;
+  height: calc(var(--headphone-stage) * .775);
+}
+.wp-device-home .wp-hero__visual--headphones.wp-hero__visual--settled > .wp-batteries {
+  animation: none;
 }
 
 .wp-hero--discovery .wp-hero__actions, .wp-hero--discovery .wp-status {

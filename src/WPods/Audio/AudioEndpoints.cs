@@ -16,6 +16,24 @@ internal static partial class AudioEndpoints
     private static readonly PropertyKey FriendlyName = new(new Guid("A45C254E-DF1C-4EFD-8020-67D146A850E0"), 14);
 
     private static readonly PropertyKey ContainerId = new(new Guid("8C7ED206-3F8A-4827-B3AB-AE9E1FAEFC6C"), 2);
+    private static readonly Guid FloatSubtype = new("00000003-0000-0010-8000-00AA00389B71");
+
+    internal static int ReadStereoFloatRate(nint format)
+    {
+        if (format == 0 || Marshal.ReadInt16(format, 2) != 2 || Marshal.ReadInt16(format, 12) != 8 ||
+            Marshal.ReadInt16(format, 14) != 32) return 0;
+        ushort tag = unchecked((ushort)Marshal.ReadInt16(format));
+        if (tag == 0xFFFE)
+        {
+            // WAVEFORMATEXTENSIBLE stores the front-left/right mask and the sample subtype.
+            if (Marshal.ReadInt16(format, 16) < 22 || Marshal.ReadInt16(format, 18) != 32 ||
+                Marshal.ReadInt32(format, 20) is not (0 or 3) ||
+                Marshal.PtrToStructure<Guid>(format + 24) != FloatSubtype) return 0;
+        }
+        else if (tag != 3) return 0;
+        int rate = Marshal.ReadInt32(format, 4);
+        return rate >= 44100 ? rate : 0;
+    }
 
     internal sealed record Route(string Id, string? Name, Guid? Container = null, bool? Muted = null);
     internal sealed record Routes(Route? Input, Route? CommunicationsInput, Route? Output, bool HardwareCallInput,
@@ -116,7 +134,10 @@ internal static partial class AudioEndpoints
     internal static IAudioEndpointVolume? OpenEndpointVolume(IMMDevice device)
     {
         Guid iid = typeof(IAudioEndpointVolume).GUID;
-        return device.Activate(ref iid, 0x17, 0, out object volume) >= 0 ? (IAudioEndpointVolume)volume : null;
+        if (device.Activate(ref iid, 0x17, 0, out object volume) < 0) return null;
+        if (volume is IAudioEndpointVolume endpoint) return endpoint;
+        if (volume != null && Marshal.IsComObject(volume)) Marshal.ReleaseComObject(volume);
+        return null;
     }
 
     internal static bool? ReadInputMute(string endpoint)
@@ -134,20 +155,32 @@ internal static partial class AudioEndpoints
     [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IAudioEndpointVolume
     {
-        // Preserve the IAudioEndpointVolume vtable order. The two getters are read-only.
-        void RegisterControlChangeNotify();
-        void UnregisterControlChangeNotify();
-        void GetChannelCount();
+        // Preserve the IAudioEndpointVolume vtable order.
+        [PreserveSig] int RegisterControlChangeNotify(nint callback);
+        [PreserveSig] int UnregisterControlChangeNotify(nint callback);
+        [PreserveSig] int GetChannelCount(out uint count);
         void SetMasterVolumeLevel();
         void SetMasterVolumeLevelScalar();
-        void GetMasterVolumeLevel();
+        [PreserveSig] int GetMasterVolumeLevel(out float level);
         [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
         void SetChannelVolumeLevel();
         void SetChannelVolumeLevelScalar();
-        void GetChannelVolumeLevel();
+        [PreserveSig] int GetChannelVolumeLevel(uint channel, out float level);
         void GetChannelVolumeLevelScalar();
         void SetMute();
         [PreserveSig] int GetMute(out int muted);
+    }
+
+    internal static IAudioEndpointVolume? OpenOutputVolume(string id)
+    {
+        var enumerator = CreateEnumerator();
+        try
+        {
+            if (enumerator.GetDevice(id, out var device) < 0) return null;
+            try { return OpenEndpointVolume(device); }
+            finally { Marshal.ReleaseComObject(device); }
+        }
+        finally { Marshal.ReleaseComObject(enumerator); }
     }
 
     private static Guid? ReadContainer(IPropertyStore store)
@@ -165,10 +198,24 @@ internal static partial class AudioEndpoints
 
     // Compare the multimedia output to the physical Bluetooth device. User-editable names
     // and the console or communications defaults cannot identify this route.
-    internal sealed record PlaybackOutput(string Id, string? Name, bool? OnPair)
+    internal enum PlaybackSilence { None, Muted, ZeroVolume }
+    internal sealed record PlaybackOutput(string Id, string? Name, bool? OnPair, PlaybackSilence Silence = PlaybackSilence.None);
+
+    internal static bool IsSpatialVirtualOutput(string? name) =>
+        name?.Contains("Virtual Speakers for AudioRelay", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static PlaybackSilence OutputSilence(bool muted, float volume) => muted ? PlaybackSilence.Muted
+        : volume == 0f ? PlaybackSilence.ZeroVolume : PlaybackSilence.None;
+
+    internal static Guid? ReadMediaOutputContainer()
     {
-        internal string? OtherOutput => OnPair == false ? Name : null;
+        var enumerator = CreateEnumerator();
+        try { return ReadRoute(enumerator, ERender, EMultimedia, readContainer: true)?.Container; }
+        finally { Marshal.ReleaseComObject(enumerator); }
     }
+
+    internal static bool IsPhysicalPair(ulong address, Guid? container) =>
+        address != 0 && container is Guid value && value != Guid.Empty && PairContainer(address) == value;
 
     internal static PlaybackOutput? ReadPlaybackOutput(ulong address)
     {
@@ -215,7 +262,7 @@ internal static partial class AudioEndpoints
 
     internal enum PlaybackChange { Pending, Selected, Superseded, Unavailable }
 
-    internal static PlaybackChange ComparePlaybackChoice(string original, string target, string? current)
+    internal static PlaybackChange ComparePlaybackChoice(string? original, string target, string? current)
     {
         if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase)) return PlaybackChange.Selected;
         return string.Equals(current, original, StringComparison.OrdinalIgnoreCase) ? PlaybackChange.Pending : PlaybackChange.Superseded;
@@ -360,21 +407,38 @@ internal static partial class AudioEndpoints
     internal static int PeakDb(double peak) => (int)Math.Round(Math.Clamp(20 * Math.Log10(Math.Max(peak, .001)), -60, 0));
 
     // Only change the Communications role, and verify it by reading Windows' default back.
-    internal static bool SetPairCallsInput(string endpoint, ulong address)
+    internal static bool SetPairCallsInput(string endpoint, ulong address, string? original, Func<bool> stillSelected)
     {
         if (!IsPairMicrophone(endpoint, address)) return false;
         var policy = (IEndpointPolicy)(object)new PolicyConfigClient();
         try
         {
+            PlaybackChange change = ComparePlaybackChoice(original, endpoint, ReadDefaultEndpointId(ECapture, ECommunications));
+            if (change != PlaybackChange.Pending) return change == PlaybackChange.Selected;
+            if (!stillSelected()) return false;
             Marshal.ThrowExceptionForHR(policy.SetDefaultEndpoint(endpoint, ECommunications));
             for (int attempt = 0; attempt < 6; attempt++)
             {
-                if (ReadDefaults().CommunicationsInput?.Id == endpoint) return true;
+                change = ComparePlaybackChoice(original, endpoint, ReadDefaultEndpointId(ECapture, ECommunications));
+                if (change != PlaybackChange.Pending) return change == PlaybackChange.Selected;
+                if (!stillSelected()) return false;
                 if (attempt < 5) Thread.Sleep(80);
             }
             return false;
         }
         finally { Marshal.ReleaseComObject(policy); }
+    }
+
+    private static string? ReadDefaultEndpointId(int flow, int role)
+    {
+        var enumerator = CreateEnumerator();
+        try
+        {
+            if (enumerator.GetDefaultAudioEndpoint(flow, role, out var device) < 0) return null;
+            try { return device.GetId(out var id) >= 0 ? id : null; }
+            finally { Marshal.ReleaseComObject(device); }
+        }
+        finally { Marshal.ReleaseComObject(enumerator); }
     }
 
     [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
@@ -540,5 +604,12 @@ internal static partial class AudioEndpoints
         [PreserveSig] int GetBuffer(out nint data, out uint frames, out uint flags, out ulong position, out ulong qpc);
         [PreserveSig] int ReleaseBuffer(uint frames);
         [PreserveSig] int GetNextPacketSize(out uint frames);
+    }
+
+    [ComImport, Guid("F294ACFC-3146-4483-A7BF-ADDCA7C260E2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IAudioRenderClient
+    {
+        [PreserveSig] int GetBuffer(int frames, out nint data);
+        [PreserveSig] int ReleaseBuffer(int frames, int flags);
     }
 }

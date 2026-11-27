@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using WPods.Core;
 using WPods.Nearby;
 using static WPods.Core.ListeningMode;
@@ -67,6 +69,31 @@ if (reattached.RememberedSettings.ListeningMode != Off)
 
 Console.WriteLine("Listening mode replays passed.");
 
+static byte[] Identify(string model, string build) =>
+    [4, 0, 4, 0, 0x1D, 0, 0, 0, 0, 0, 0,
+        .. Encoding.UTF8.GetBytes($"Test AirPods\0{model}\0Vendor\0redacted\0{build}")];
+
+var identified = new DeviceState(0, 0, PodSettings.None);
+Aap.Apply(Identify("A3063", "91.3431046004000000.29\0"), identified);
+if (identified.ModelName != "AirPods Pro 3" || identified.FirmwareBuild != "91.3431046004000000.29")
+    throw new InvalidOperationException("The reported internal build should be parsed with its full precision.");
+if (Aap.Apply(Identify("A3063", "91.3431046004000000.29\0"), identified) != DeviceChange.None)
+    throw new InvalidOperationException("An identical firmware report should not redraw device information.");
+if ((Aap.Apply(Identify("A3063", "92.02.1\0"), identified) & DeviceChange.Identity) == 0
+    || identified.FirmwareBuild != "92.02.1")
+    throw new InvalidOperationException("A firmware-only change should refresh device information.");
+Aap.Apply(Identify("A3063", "garbage\0"), identified);
+Aap.Apply(Identify("A3063", "93.01.1"), identified);
+if (identified.FirmwareBuild != "92.02.1")
+    throw new InvalidOperationException("A malformed or truncated build should keep the previous reading.");
+Aap.Apply(Identify("A2084", "\0"), identified);
+if (identified.FirmwareBuild is not null)
+    throw new InvalidOperationException("The previous model's firmware must not leak to a new identity.");
+Aap.Apply(Identify("A2084", "7B21\0"), identified);
+if (identified.FirmwareBuild != "7B21")
+    throw new InvalidOperationException("Short firmware revisions should be accepted.");
+Console.WriteLine("Device identity replays passed.");
+
 var modeSets = new (string Model, ListeningMode[] Supported)[]
 {
     ("A1523", []), ("A2032", []), ("A2565", []), ("A3053", []),
@@ -105,6 +132,43 @@ var rightDocked = leftDocked with { Right = new Battery(100, BatteryStatus.Disch
 if (!Proximity.HasDockedEarbudSignal(advertisement, rightDocked))
     throw new InvalidOperationException("A fully charged transmitting bud can still be docked.");
 Console.WriteLine("Verified the case signal accepts a known docked transmitter without attributing the undocked bud's signal to the case.");
+
+// Payloads from the original Pro 3 case measurements, re-encrypted with dummy keys.
+// https://github.com/stuffz/airpods/blob/main/docs/ble-research.md#case-controlled-changes
+using var caseKey = Proximity.CreateCipher(new byte[16]);
+using var unrelatedKey = Proximity.CreateCipher(Enumerable.Repeat((byte)0x11, 16).ToArray());
+byte[] CasePacket(string hex)
+{
+    var packet = new byte[19];
+    packet[0] = 0x07;
+    packet[1] = 0x11;
+    packet[2] = 0x06;
+    caseKey.EncryptEcb(Convert.FromHexString(hex), packet.AsSpan(3), PaddingMode.None);
+    return packet;
+}
+void ExpectCase(string hex, Battery left, Battery right, Battery @case)
+{
+    byte[] packet = CasePacket(hex);
+    if (!Proximity.TryReadCaseBroadcast(packet, caseKey, out var observed, out bool header) || !header ||
+        observed != new PodBatteries(left, right, @case, default))
+        throw new InvalidOperationException($"Case packet decoded the wrong battery levels: {hex} -> {observed}.");
+    if (Proximity.TryReadCaseBroadcast(packet, unrelatedKey, out _, out _))
+        throw new InvalidOperationException("A different paired key decoded the case packet.");
+}
+var l94 = new Battery(94, BatteryStatus.Charging);
+var r93 = new Battery(93, BatteryStatus.Charging);
+var c61 = new Battery(61, BatteryStatus.Discharging);
+ExpectCase("29200A3DDEDD510B000E0000B6841600", l94, r93, c61); // Closed lid.
+ExpectCase("292008BDDEDD510B0000000025831600", l94, r93, c61 with { Status = BatteryStatus.Charging });
+ExpectCase("29200B3DDEFF510B00050000DA841600", l94, default, c61); // Only the right bud was removed.
+ExpectCase("2920093DFFFF510B0000000040831600", default, default, c61);
+ExpectCase("29200A64E4E45A8600000000F2720000", new(100, BatteryStatus.Charging), new(100, BatteryStatus.Charging), new(100, BatteryStatus.Discharging));
+ExpectCase("292009FF8000510B0000000045831600", new(0, BatteryStatus.Charging), new(0, BatteryStatus.Discharging), default);
+if (Proximity.TryReadCaseBroadcast(CasePacket("2920093D65DD510B0000000045831600"), caseKey, out var invalid, out _) || invalid != default)
+    throw new InvalidOperationException("An invalid earbud percent escaped the case layout checks.");
+if (Proximity.TryReadCaseBroadcast([0x07, 0x11, 0x06], caseKey, out _, out _))
+    throw new InvalidOperationException("A truncated case broadcast was accepted.");
+Console.WriteLine("Verified Pro 3 case batteries from encrypted captures, including closed lid, empty slots, and pair isolation.");
 
 namespace WPods.Core
 {

@@ -5,6 +5,7 @@
   min-width: 0;
 }
 .wp-mic-setup .wp-mic-check { display: grid; gap: 12px; padding: 0; }
+.wp-mic-tools-group { grid-column: 1 / -1; min-inline-size: 0; }
 /* The source, record action and live meter stay together as the input changes. */
 .wp-mic-test-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 .wp-mic-test-head .wp-mic-source__name { flex: 1 1 132px; }
@@ -48,19 +49,22 @@
   padding: clamp(13px, 3.2vw, 20px);
 }
 .wp-mic-source__name { flex: 1; min-width: 0; }
-.wp-mic-source__name h2, .wp-mic-check__meter .wp-signal__label {
+.wp-mic-check__meter .wp-signal__label {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
   font-weight: 500;
 }
-.wp-mic-source__name strong {
+.wp-mic-source__name h2 {
+  margin: 0;
+  font: 600 15px/1.35 var(--font-text);
+}
+.wp-mic-source__name > span {
   display: block;
-  margin-block-start: 2px;
-  font-weight: 600;
-  font-size: clamp(17px, 3vw, 20px);
-  letter-spacing: -.025em;
-  line-height: 1.25;
+  margin-block-start: 3px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 .wp-mic-link {
@@ -87,7 +91,6 @@
 }
 .wp-mic-check__meter .wp-signal__track i.is-lit { background: var(--success); }
 .wp-mic-check__meter .wp-signal__track i.is-lit:nth-last-child(-n+3) { background: var(--warning); }
-.wp-mic-source__name h2 { margin: 0; }
 .wp-mic-sample-footer {
   display: flex;
   align-items: center;
@@ -162,14 +165,20 @@
 .wp-mic-test-head { align-items: flex-end; }
 .wp-mic-source-picker { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .wp-mic-source-picker select { max-inline-size: 100%; font-size: 12px; }
+.wp-mic-sample-output {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.wp-mic-sample-output select { justify-self: end; max-inline-size: 100%; min-inline-size: 0; font-size: inherit; }
 .wp-mic-scope {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  min-height: 88px;
+  min-height: 64px;
   align-items: center;
-  padding: 11px 13px;
-  border-radius: 11px;
-  background: var(--fill-sunken);
 }
 .wp-mic-scope > * { grid-area: 1 / 1; }
 .wp-mic-transport {
@@ -179,9 +188,12 @@
   align-items: center;
   gap: 6px;
 }
-.wp-mic-transport__status { color: var(--text-secondary); font-size: 12px; }
+.wp-mic-transport__status {
+  color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums;
+}
 .wp-mic-transport .wp-mic-check__actions { justify-content: flex-end; }
-.wp-mic-transport .wp-btn { min-inline-size: 110px; }
+.wp-mic-transport .wp-btn { min-inline-size: 118px; }
+.wp-mic-transport .wp-btn--subtle { min-inline-size: 0; }
 .wp-mic-recording-time {
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
@@ -194,8 +206,7 @@
 .wp-mic-side select { max-inline-size: 59%; }
 @media (max-width: 385px) {
   .wp-mic-transport .wp-btn { min-inline-size: 0; padding-inline: 10px; }
-  .wp-mic-transport:has(.wp-mic-replay:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
-  .wp-mic-transport:has(.wp-mic-replay:not([hidden])) .wp-mic-transport__status { display: none; }
+  .wp-mic-sample-summary { white-space: nowrap; }
 }
 
 .wp-mic-transport .wp-btn[aria-disabled='true'] { opacity: .65; cursor: progress; }

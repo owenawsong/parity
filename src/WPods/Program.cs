@@ -79,11 +79,17 @@ internal static class Program
         // Opening the case releases a pair the user disconnected while Windows still has its link up.
         nearby.CaseOpened += connections.OnCaseOpened;
         var app = new TrayApp(settings, connections, nearby, mic, keepAlive, ducker, mixer, locales, startHidden: startup);
+        using var shutdown = AppIdentity.IsPairside
+            ? new EventWaitHandle(false, EventResetMode.AutoReset, $@"Local\Parity.Shutdown.{Environment.ProcessId}")
+            : null;
+        var shutdownWait = shutdown is null ? null : ThreadPool.RegisterWaitForSingleObject(
+            shutdown, (_, _) => app.RequestExit(), null, Timeout.Infinite, executeOnlyOnce: true);
         using var defaultOutput = new DefaultOutputWatcher(connections);
         connections.Start();
         nearby.Start();
         Application.Run(app);
 
+        shutdownWait?.Unregister(null);
         activationWait.Unregister(null);
         Log.Info("app", "exit");
         Log.Flush();

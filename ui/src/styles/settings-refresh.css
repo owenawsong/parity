@@ -33,6 +33,35 @@
   border-block-end: 1px solid var(--separator);
 }
 .wp-settings-device .wp-settings-device-note:not([hidden]) { margin-block-start: 10px; }
+.wp-device-information:not([hidden]) {
+  border-block-start: 1px solid var(--separator);
+}
+.wp-app-settings .wp-device-information > summary {
+  min-height: 46px;
+  padding: 10px var(--row-inset);
+  gap: var(--row-gap);
+}
+.wp-device-information > .wp-tool-details__body { background: var(--fill-sunken); }
+.wp-device-information dl {
+  margin: 0;
+  padding: 10px var(--row-inset);
+  font-size: 12px;
+}
+.wp-device-information dl > div:not([hidden]) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--row-gap);
+  padding-block: 4px;
+}
+.wp-device-information dt { color: var(--text-secondary); }
+.wp-device-information dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-align: match-parent;
+  user-select: text;
+}
 .wp-app-settings .wp-settings-rows {
   --lead-width: 20px;
   --row-inset: 15px;

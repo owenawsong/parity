@@ -1,6 +1,7 @@
 import { setAttr, setHidden, setText } from '../dom';
 import { t } from '../i18n';
 import { Art, Icon } from '../icons';
+import { finishArtworkKey, hardwareArt } from '../hardwareArt';
 import type { Offer } from '../protocol';
 import { createPopupBatteries } from './batteries';
 import { createPopupMotion } from './modelMotion';
@@ -9,7 +10,7 @@ type OfferView = {
   el: HTMLDivElement;
   connect: HTMLButtonElement;
   secondary: HTMLButtonElement;
-  render: (offer: Offer, visible: boolean, separateBatteries: boolean) => void;
+  render: (offer: Offer, visible: boolean, separateBatteries: boolean, bundledOnly?: boolean, finish?: string) => void;
   stopMotion: () => void;
 };
 
@@ -100,7 +101,7 @@ export const createOfferView = (o: {
       previousState = null;
       previousDevice = null;
     },
-    render: (offer, visible, separateBatteries) => {
+    render: (offer, visible, separateBatteries, bundledOnly = false, finish) => {
       const { state } = offer;
       const failed = state === 'failed';
       const changing = state !== previousState || offer.id !== previousDevice;
@@ -114,18 +115,24 @@ export const createOfferView = (o: {
         outgoing.setAttribute('aria-hidden', 'true');
         outgoing.classList.add('wp-popup__action-ghost');
       }
-      const model = motion?.forModel(offer.model) ?? null;
+      const key = finishArtworkKey(offer.model ?? '', finish);
+      const model = bundledOnly ? null : motion?.forModel(key) ?? null;
       const rotating = model ? motion : null;
       const pro3 = offer.model === 'AirPods Pro 3';
-      const hardware = pro3 && !rotating ? PRO3_HOME_ART : null;
-      const nextModel = rotating ? 'motion' : hardware ? 'pro3-packaged' : offer.art;
+      const hardware = !rotating ? hardwareArt(offer.model, bundledOnly, finish) : null;
+      const nextModel = rotating ? 'motion' : hardware ? `hardware:${key}:${bundledOnly}` : offer.art;
       if (nextModel !== artModel) {
         artModel = nextModel;
         stillCase = undefined;
         let next: Element;
         if (rotating) {
           next = rotating.el;
-        } else if (hardware) {
+        } else if (hardware?.headphone) {
+          const image = new Image();
+          image.src = hardware.headphone;
+          image.className = 'wp-popup__art wp-popup__art--headphone';
+          next = image;
+        } else if (hardware?.left && hardware.right) {
           const left = new Image();
           left.src = hardware.left;
           left.alt = '';
@@ -147,9 +154,12 @@ export const createOfferView = (o: {
         art.replaceWith(next);
         art = next;
       }
-      if (hardware && stillCase) setAttr(stillCase, 'src', offer.batteries.case?.charging ? hardware.caseCharging : hardware.case);
-      if (!rotating) setAttr(art, 'aria-label', t(`art.${offer.art}`));
-      motion?.show(rotating ? offer.id : null, model, offer.batteries.case?.charging === true, visible, state === 'offer' || connecting);
+      if (hardware && stillCase) setAttr(stillCase, 'src',
+        (offer.batteries.case?.charging ? hardware.caseCharging : null) ?? hardware.case ?? null);
+      if (art instanceof HTMLImageElement) setAttr(art, 'alt', t(`art.${offer.art}`));
+      else if (!rotating) setAttr(art, 'aria-label', t(`art.${offer.art}`));
+      motion?.show(rotating ? offer.id : null, model, offer.batteries.case?.charging === true, visible,
+        state === 'connected' || failed);
       setAttr(el, 'data-state', state);
       setAttr(art, 'aria-hidden', rotating ? 'true' : null);
       setHidden(failure, !failed);
@@ -159,7 +169,7 @@ export const createOfferView = (o: {
       const deviceName = offer.name.trim() || modelLabel || t('home.yourAirPods');
       setText(name, deviceName);
       const focus = document.hasFocus() ? document.activeElement : null;
-      batteries.update(offer.batteries, separateBatteries, pro3 && (!!rotating || !!hardware));
+      batteries.update(offer.batteries, separateBatteries, (pro3 && !!rotating) || !!hardware?.case);
       const caption = connecting ? t('popup.connecting') : state === 'connected' ? t('popup.connected') : '';
       setText(subtitle, caption);
       const wasConnecting = !connect.hidden && !showConnect && focus === connect;

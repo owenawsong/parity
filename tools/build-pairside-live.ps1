@@ -1,9 +1,11 @@
 param(
     [string]$RuntimeRoot,
-    [string]$PackagePath
+    [string]$PackagePath,
+    [switch]$OwnerPreview
 )
 
 $ErrorActionPreference = 'Stop'
+if ($OwnerPreview -and $PackagePath) { throw 'The owner preview is available only in a local desktop build.' }
 $rootPath = Split-Path -Parent $PSScriptRoot
 $runtimeFiles = @(
     'wpods_native.dll', 'avcodec-61.dll', 'avutil-59.dll', 'swresample-5.dll',
@@ -28,7 +30,9 @@ $localSdk = Join-Path $rootPath '.build/dotnet/dotnet.exe'
 $dotnetExe = if (Test-Path -LiteralPath $localSdk) { $localSdk } else { 'dotnet' }
 $publishPath = Join-Path $rootPath 'dist/pairside-live'
 $uiArgs = @('--local-pro3-art')
+if ($OwnerPreview) { $uiArgs += '--owner-preview' }
 $publishArgs = @('-p:PairsideLive=true')
+if ($OwnerPreview) { $publishArgs += '-p:ParityOwnerPreview=true' }
 if ($PackagePath) {
     $archive = [IO.Path]::GetFullPath($PackagePath)
     if ([IO.Path]::GetExtension($archive) -ne '.zip' -or (Test-Path -LiteralPath $archive)) {
@@ -39,7 +43,7 @@ if ($PackagePath) {
     $packageWeb = Join-Path $stage 'web'
     [IO.Directory]::CreateDirectory($bundle) | Out-Null
     $publishPath = Join-Path $bundle 'app'
-    $uiArgs = @('--bundled-pro3-art', "--fresh-output=$packageWeb")
+    $uiArgs = @("--fresh-output=$packageWeb")
     $publishArgs += @('-p:ParityBluetooth=true', "-p:ParityPackageWeb=$packageWeb", '--artifacts-path', (Join-Path $stage 'artifacts'), '-p:DebugSymbols=false', '-p:DebugType=None')
 }
 

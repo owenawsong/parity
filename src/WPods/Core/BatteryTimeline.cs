@@ -101,13 +101,13 @@ internal sealed class BatteryTimeline(string path)
     {
         if (at > now || now - at > 90_000 || !_pairs.TryGetValue(id, out var pair) ||
             !pair.Alerts.TryGetValue(part, out var alert) || at <= alert.After) return false;
-        if (pct < alert.Target)
+        bool below = pct < alert.Target;
+        if (below || !alert.Below)
         {
-            pair.Alerts[part] = alert with { After = at, Below = true };
-            if (!alert.Below) _dirty = true;
+            pair.Alerts[part] = alert with { After = at, Below = below };
+            _dirty = true;
             return false;
         }
-        if (!alert.Below) return false;
         pair.Alerts.Remove(part);
         _dirty = true;
         return true;

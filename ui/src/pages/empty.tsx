@@ -3,7 +3,7 @@ import { createConnectionDisclosure } from '../components/connectionCheck';
 import { setText } from '../dom';
 import { bindAttr, t } from '../i18n';
 import { Art, Icon } from '../icons';
-import { post } from '../host';
+import { isPairside, post } from '../host';
 import { store } from '../state';
 import { LegalFoot } from './legal';
 import type { Ctx, Page } from './page';
@@ -31,6 +31,7 @@ export const createEmpty = (ctx: Ctx): Page => {
             <Icon name="bluetooth" />
             <span l:text="empty.openBluetooth" />
           </button>
+          {isPairside && <button class="wp-link" type="button" l:text="nav.preferences" onclick={() => ctx.go('windows')} />}
         </div>
         <PairSteps />
         {check.el}

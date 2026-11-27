@@ -18,16 +18,8 @@ internal sealed class EarMediaTransport
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             var manager = await Manager.RequestAsync().AsTask(timeout.Token).ConfigureAwait(false);
-            var streams = AudioEndpoints.PlayerStreams(address);
             var sessions = manager.GetSessions();
-            var candidates = sessions.Where(s => s.GetPlaybackInfo()?.PlaybackStatus == Status.Playing &&
-                AudioEndpoints.PlaysOnPair(streams, s.SourceAppUserModelId, paused: false)).ToArray();
-            // Multiple SMTC sessions can identify themselves as the same browser. WASAPI cannot
-            // say which tab owns a stream. Likewise two different players can both be audible.
-            if (candidates.Length != 1) return false;
-            var target = candidates[0];
-            if (sessions.Count(s => s.SourceAppUserModelId.Equals(target.SourceAppUserModelId, StringComparison.OrdinalIgnoreCase)) != 1)
-                return false;
+            if (SelectPlayer(address, sessions, allowPaused: false) is not { } target) return false;
             if (!stillWanted() || target.GetPlaybackInfo()?.PlaybackStatus != Status.Playing) return false;
             ResumeWatch? watch = remember ? new(manager, target, sessions) : null;
             try
@@ -45,6 +37,18 @@ internal sealed class EarMediaTransport
             Log.Warn("earpause", $"media pause unavailable ({e.GetType().Name})");
             return false;
         }
+    }
+
+    internal static Player? SelectPlayer(ulong address, IReadOnlyList<Player> sessions, bool allowPaused)
+    {
+        if (sessions.Count == 0) return null;
+        var players = sessions.Select(player =>
+        {
+            var status = player.GetPlaybackInfo()?.PlaybackStatus;
+            return new AudioEndpoints.MediaPlayerRoute(player.SourceAppUserModelId, status == Status.Playing, status == Status.Paused);
+        }).ToArray();
+        int candidate = AudioEndpoints.SelectPairPlayer(AudioEndpoints.PlayerStreams(address), players, allowPaused);
+        return candidate < 0 ? null : sessions[candidate];
     }
 
     internal async Task<bool> ResumeAsync(ulong address, Func<bool> stillWanted)

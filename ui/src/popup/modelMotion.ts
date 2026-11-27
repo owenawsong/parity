@@ -25,18 +25,13 @@ export const createPopupMotion = () => {
   let active: DeviceId | null = null;
   let loaded: PopupScene | null = null;
   let wasVisible = false;
-  let wasAnimating = false;
+  let keptLighting = false;
   let request = 0;
-  let coast = 0;
+  let park = 0;
   let blend: Animation | undefined;
-  const stopCoast = (): void => {
-    cancelAnimationFrame(coast);
-    coast = 0;
-    video.playbackRate = 1;
-  };
   const showPoster = (): void => {
     request++;
-    stopCoast();
+    clearTimeout(park);
     blend?.cancel();
     video.pause();
     setHidden(video, true);
@@ -49,28 +44,10 @@ export const createPopupMotion = () => {
       return;
     }
     const play = ++request;
-    stopCoast();
+    clearTimeout(park);
     if (!wasVisible) {
-      video.pause();
-      return;
-    }
-    if (!wasAnimating) {
-      if (video.paused || video.hidden) {
-        video.pause();
-        return;
-      }
-      const started = performance.now();
-      const brake = (now: number): void => {
-        const progress = Math.min(1, (now - started) / 190);
-        if (progress < 1) {
-          video.playbackRate = 1 - .75 * progress;
-          coast = requestAnimationFrame(brake);
-        } else {
-          video.pause();
-          stopCoast();
-        }
-      };
-      coast = requestAnimationFrame(brake);
+      // The native popup is still fading out. Keep moving through its exit.
+      park = window.setTimeout(() => video.pause(), 240);
       return;
     }
     void video.play().then(() => {
@@ -93,16 +70,15 @@ export const createPopupMotion = () => {
     el,
     forModel: (model?: string): PopupModelArt | null =>
       model && Object.hasOwn(models, model) ? models[model] : null,
-    show: (device: DeviceId | null, model: PopupModelArt | null = null, charging = false, visible = true, animate = true): void => {
+    show: (device: DeviceId | null, model: PopupModelArt | null = null, charging = false, visible = true, keepLighting = false): void => {
       const sameDevice = device === active;
       const variant = model ? (charging ? model.charging ?? model.standard : model.standard) : null;
-      // Keep the pose and lighting steady while the connection status is changing.
-      const next = sameDevice && !animate && loaded ? loaded : variant;
-      if (sameDevice && (device === null || (next === loaded && visible === wasVisible && animate === wasAnimating))) return;
+      const next = sameDevice && keepLighting && loaded ? loaded : variant;
+      if (sameDevice && (device === null || (next === loaded && visible === wasVisible && keepLighting === keptLighting))) return;
       const turnPosition = sameDevice ? video.currentTime : 0;
       active = device;
       wasVisible = visible;
-      wasAnimating = animate;
+      keptLighting = keepLighting;
       if (!device || !next) {
         showPoster();
         return;

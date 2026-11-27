@@ -83,40 +83,46 @@ internal static partial class ServicePipes
     /// Opens an AAP channel to <paramref name="address"/> without paging. Null with the error: 1167 no ACL link,
     /// 170 open by another client, 1225 refused by the AirPods, 121 no answer, else a pipe error.
     /// </summary>
-    public static NamedPipeClientStream? OpenAap(ulong address, out int error)
+    public static async Task<(NamedPipeClientStream? Pipe, int Error)> OpenAapAsync(ulong address, CancellationToken ct)
     {
-        if (Connect(AapPipe, out error) is not { } pipe)
-        {
-            return null;
-        }
+        // CreateFile can hit WaitNamedPipe when the service is busy. Keep
+        // that synchronous Windows call off the calling thread as well.
+        var (pipe, error) = await Task.Run(() => (Connect(AapPipe, out int code), code), ct).ConfigureAwait(false);
+        if (pipe is null) return (null, error);
+        bool accepted = false;
         try
         {
-            Span<byte> hello = stackalloc byte[10];
-            hello[0] = (byte)'A';
-            hello[1] = (byte)'P';
-            BinaryPrimitives.WriteUInt64LittleEndian(hello[2..], address);
-            pipe.Write(hello);
-            byte[] reply = new byte[16];
-            using var timeout = new CancellationTokenSource(AapReplyTimeout);
-            int count = pipe.ReadAsync(reply, timeout.Token).AsTask().GetAwaiter().GetResult();
-            error = count == 0 ? ErrorBrokenPipe
-                : count == 5 && reply[0] == AapOpenReply ? BinaryPrimitives.ReadInt32LittleEndian(reply.AsSpan(1))
-                : ErrorInvalidData;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(AapReplyTimeout);
+            error = await ExchangeAapOpenAsync(pipe, address, timeout.Token).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            accepted = error == Native.ErrorSuccess;
+            return (accepted ? pipe : null, error);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            error = ErrorSemTimeout;
+            return (null, ErrorSemTimeout);
         }
         catch (IOException e)
         {
-            error = e.HResult & 0xFFFF;
+            return (null, e.HResult & 0xFFFF);
         }
-        if (error == Native.ErrorSuccess)
+        finally
         {
-            return pipe;
+            if (!accepted) pipe.Dispose();
         }
-        pipe.Dispose();
-        return null;
+    }
+
+    internal static async ValueTask<int> ExchangeAapOpenAsync(Stream pipe, ulong address, CancellationToken ct)
+    {
+        byte[] hello = [(byte)'A', (byte)'P', 0, 0, 0, 0, 0, 0, 0, 0];
+        BinaryPrimitives.WriteUInt64LittleEndian(hello.AsSpan(2), address);
+        await pipe.WriteAsync(hello, ct).ConfigureAwait(false);
+        byte[] reply = new byte[16];
+        int count = await pipe.ReadAsync(reply, ct).ConfigureAwait(false);
+        return count == 0 ? ErrorBrokenPipe
+            : count == 5 && reply[0] == AapOpenReply ? BinaryPrimitives.ReadInt32LittleEndian(reply.AsSpan(1))
+            : ErrorInvalidData;
     }
 
     // Rejects pipes squatted by another process under the service's name.

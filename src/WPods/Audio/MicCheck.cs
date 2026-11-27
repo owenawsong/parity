@@ -12,6 +12,7 @@ internal static class MicCheck
     private const int MinimumSampleFrames = Rate / 4;
     private const int Silent = 2;
     private const int ConvertPcm = unchecked((int)0x88000000);
+    private const int MicWarmupMs = 1000;
 
     internal sealed record Recording(byte[] Wave, int PeakDb, int[] Envelope, string Level);
     internal sealed class MutedInputException : Exception { }
@@ -20,7 +21,7 @@ internal static class MicCheck
     internal sealed class NoFramesException : Exception { }
 
     internal static unsafe Recording Capture(string endpoint, bool verifyCallsDefault, CancellationToken ct,
-        Action<int, int>? progress = null, Func<bool>? finished = null)
+        Action<int, int>? progress = null, Func<bool>? finished = null, Func<bool>? inputReady = null)
     {
         ct.ThrowIfCancellationRequested();
         if (finished?.Invoke() == true) throw new ShortSampleException();
@@ -55,6 +56,7 @@ internal static class MicCheck
             // Keep the test bounded even if the endpoint stops delivering frames.
             long deadline = Environment.TickCount64 + DurationMs + 1700;
             long lastPacket = Environment.TickCount64;
+            long warmupEnds = lastPacket + MicWarmupMs;
             while (copied < limit && Environment.TickCount64 < deadline)
             {
                 ct.ThrowIfCancellationRequested();
@@ -70,6 +72,13 @@ internal static class MicCheck
                 Marshal.ThrowExceptionForHR(capture.GetBuffer(out nint data, out uint frames, out uint flags, out _, out _));
                 try
                 {
+                    // WASAPI can deliver silence while the wireless mic is still waking up.
+                    // After the deadline, keep recording so an unavailable feed can still be diagnosed.
+                    if (inputReady is not null)
+                    {
+                        if (lastPacket < warmupEnds && !inputReady()) continue;
+                        inputReady = null;
+                    }
                     int count = (int)Math.Min(frames, (uint)(limit - copied));
                     if (copied + count > pcm.Length) Array.Resize(ref pcm, Math.Min(limit, Math.Max(pcm.Length * 2, copied + count)));
                     if ((flags & Silent) == 0 && data != 0)

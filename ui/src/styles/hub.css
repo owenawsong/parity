@@ -1,19 +1,11 @@
-.wp-narrow-nav { display: none; }
-@media (max-width: 459px) {
-  .wp-destinations:not([hidden]) .wp-destination { display: none; }
-  .wp-destinations:not([hidden]) { display: flex; padding: 3px 14px 8px; }
-  /* The selected destination already names the page. Keep the primary heading
-     available to readers and preserve the visible title on detail pages. */
-  .wp-workspace:has(.wp-destination[aria-current='page']) .wp-detail-heading {
-    position: absolute; width: 1px; height: 1px; overflow: hidden;
-    clip-path: inset(50%); white-space: nowrap; margin: 0; padding: 0;
-  }
-  .wp-narrow-nav {
-    display: flex; align-items: center; width: 100%; height: 34px; padding-inline: 10px;
-    background: var(--surface-card); color: var(--text-primary); border: 1px solid var(--separator);
-    border-radius: 8px; font: inherit; font-weight: 600;
-  }
+.wp-page .wp-hairline-group {
+  background: transparent;
+  border: 0;
+  border-block-start: 1px solid var(--pairside-line);
+  border-radius: 0;
+  box-shadow: none;
 }
+
 .wp-remote-surface {
   padding-inline: clamp(12px, 3vw, 16px);
   border-radius: 14px;

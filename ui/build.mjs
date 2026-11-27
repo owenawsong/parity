@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { jsxDomPlugin } from './tools/jsx-dom.mjs';
-import { appArtwork, bundledHardware, popupAssets } from './tools/popup-assets.mjs';
+import { appArtwork, bundledHardware, bundledModels, popupAssets } from './tools/popup-assets.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.join(here, 'src');
@@ -15,8 +15,7 @@ const out = packageOutput ? path.resolve(packageOutput) : path.resolve(here, '..
 const useLocalPro3 = process.argv.includes('--local-pro3-art');
 const buildDir = path.resolve(here, '../.build');
 const localFiles = new Map();
-const register = (file) => {
-  const name = path.basename(file);
+const register = (file, _kind, name = path.basename(file)) => {
   if (localFiles.has(name) && localFiles.get(name) !== file) {
     throw new Error(`Duplicate local artwork filename: ${name}`);
   }
@@ -25,9 +24,10 @@ const register = (file) => {
 };
 const popups = useLocalPro3 ? await popupAssets(buildDir, register) : null;
 const art = useLocalPro3 ? await appArtwork(buildDir, register) : null;
-const hardware = art?.hardware ?? (process.argv.includes('--bundled-pro3-art')
-  ? await bundledHardware(path.join(src, 'assets/parity-pro3'), register)
-  : null);
+const shippedPro3 = await bundledHardware(path.join(src, 'assets/parity-pro3'), register);
+const hardware = art?.hardware ?? shippedPro3;
+const modelArt = await bundledModels(path.join(src, 'assets/parity-models'), register);
+modelArt['AirPods Pro 3'] = shippedPro3;
 const posters = popups ? Object.fromEntries(Object.entries(popups).map(([model, art]) => [model, art.standard.poster])) : null;
 await Promise.all([...localFiles.values()].map((file) => access(file)));
 
@@ -68,8 +68,11 @@ const result = await build({
   target: ['es2022', 'chrome120'],
   define: {
     PRO3_HOME_ART: JSON.stringify(hardware),
+    AIRPODS_MODEL_ART: JSON.stringify(modelArt),
+    OWNER_PREVIEW: JSON.stringify(useLocalPro3 && process.argv.includes('--owner-preview') && !packageOutput),
     AIRPODS_CONNECT_MOTION: JSON.stringify(art?.connections ?? null),
-    PRO3_WAITING_MOTION: JSON.stringify(art?.waiting ?? null),
+    AIRPODS_WAITING_MOTION: JSON.stringify(art?.waiting ?? null),
+    AIRPODS_LOCAL_ART: JSON.stringify(art?.localHardware ?? null),
     AIRPODS_HOME_POSTERS: JSON.stringify(posters),
     AIRPODS_LOCAL_POPUPS: JSON.stringify(popups),
   },

@@ -1,7 +1,7 @@
 .wp-now-playing {
   min-width: 0;
   container: player / inline-size;
-  padding: 12px 14px 10px;
+  padding: 10px 12px 8px;
   border: 1px solid var(--console-line);
   border-radius: 15px;
   background: var(--surface-card);
@@ -11,13 +11,13 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 13px;
+  column-gap: 11px;
 }
 .wp-now-playing__art {
   position: relative;
   display: grid;
   place-items: center;
-  width: 58px;
+  width: 46px;
   aspect-ratio: 1;
   border-radius: 8px;
   overflow: hidden;
@@ -28,9 +28,21 @@
 .wp-now-playing__art > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .wp-now-playing__track { display: grid; min-width: 0; align-content: center; gap: 1px; }
 .wp-now-playing__track > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wp-now-playing__source { color: var(--text-secondary); font-size: 11px; line-height: 15px; }
-.wp-now-playing__track strong { font: 620 16px/1.26 var(--font-text); letter-spacing: -.018em; }
-.wp-now-playing__artist { color: var(--text-secondary); font-size: 13px; line-height: 18px; }
+.wp-now-playing__meta { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.wp-now-playing__meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-now-playing__source { color: var(--text-secondary); font-size: 11px; line-height: 17px; }
+.wp-now-playing__artist:not([hidden]) + .wp-now-playing__source:not([hidden])::before { content: ' · '; }
+.wp-now-playing__track strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  hyphens: none;
+  font: 620 15px/1.26 var(--font-text);
+  letter-spacing: -.018em;
+}
+.wp-now-playing__artist { color: var(--text-secondary); font-size: 12px; line-height: 17px; }
 .wp-now-playing__transport { display: flex; align-items: center; direction: ltr; gap: 1px; }
 .wp-now-playing__transport > button {
   display: grid; place-items: center; width: 33px; height: 38px; padding: 0;
@@ -47,7 +59,7 @@
 .wp-now-playing[data-state='idle'] .wp-now-playing__body { grid-template-columns: auto minmax(0, 1fr); }
 .wp-now-playing[data-state='idle'] .wp-now-playing__artist { white-space: normal; }
 @container player (max-width: 340px) {
-  .wp-now-playing__art { width: 46px; }
+  .wp-now-playing__art { width: 41px; }
   .wp-now-playing__body { column-gap: 9px; }
   .wp-now-playing__track strong { font-size: 15px; }
   .wp-now-playing__transport > button { width: 27px; height: 32px; }

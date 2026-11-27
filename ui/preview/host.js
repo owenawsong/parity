@@ -65,6 +65,7 @@
   let receive;
   let attached = null;
   let state = null;
+  let connectionId = 0;
   let pending = 0;
   let connectionDelay = 830;
   let prefs = { theme: 'dark', useAccent: false, startup: false };
@@ -185,6 +186,7 @@
     const rightIn = !single && (seated & 2) !== 0;
     state = {
       ...device.saved,
+      connectionId: ++connectionId,
       caps: device.caps, ready, checking: !ready,
       battery: {
         ...device.battery,
@@ -403,11 +405,11 @@
         break;
       case 'setOnboardEq':
       case 'previewOnboardEq':
-        if (!state?.onboardEq || attached !== command.id) break;
+        if (!state?.ready || !state.onboardEq || attached !== command.id || state.connectionId !== command.connectionId) break;
         onboardEq = state.onboardEq = command.value;
         send({ type: 'settings', settings: { onboardEq } });
         if (command.type === 'setOnboardEq')
-          send({ type: 'onboardEqResult', id: command.id, request: command.request, status: 'confirmed' });
+          send({ type: 'onboardEqResult', id: command.id, request: command.request, status: 'sent' });
         break;
       case 'setSpatialPlayer':
         spatialSource = command.name;
@@ -436,8 +438,10 @@
         break;
       case 'readConnectionCheck':
         send({ type: 'connectionCheck', request: command.request, service: 'running', serviceVersion: '',
-          connected: !!state?.ready, discovery: 'watching', knownEndpoints: true, playback: 'Preview speakers', callOutput: 'Preview speakers',
-          callInput: 'Preview microphone', callMuted: false, spatialDevice: true });
+          connected: command.id === attached && !!state?.ready, discovery: command.id ? 'watching' : 'pairFirst',
+          knownEndpoints: true, playback: 'Preview speakers', callOutput: 'Preview speakers',
+          callInput: 'Preview microphone', endpoints: { playback: true, callInput: true, callOutput: true },
+          callMuted: false, spatialDevice: true });
         break;
       case 'watchCaseFinder':
         if (command.id === 'pro') send({ type: 'caseSignal', id: 'pro', dbm: -62, age: 0, source: 'case' });

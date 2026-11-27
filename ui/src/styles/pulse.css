@@ -19,9 +19,25 @@
 .wp-pulse-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .wp-pulse-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 12px;
+}
+.wp-pulse-sensor-icon {
+  display: grid;
+  place-items: center;
+  inline-size: 36px;
+  block-size: 36px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--pulse-ink) 12%, var(--surface-card));
+  color: var(--pulse-ink);
+}
+.wp-pulse-sensor-icon .wp-icon { inline-size: 17px; block-size: 17px; }
+.wp-pulse-card:not([data-view='idle']) .wp-pulse-sensor-icon { margin-block-start: 2px; }
+@container (max-width: 320px) {
+  .wp-pulse-head { column-gap: 8px; }
+  .wp-pulse-sensor-icon { inline-size: 28px; block-size: 28px; border-radius: 8px; }
+  .wp-pulse-head .wp-btn { padding-inline: 9px; }
 }
 .wp-pulse-reading h2, .wp-pulse-plot h3 {
   margin: 0;

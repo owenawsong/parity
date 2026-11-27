@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../src/WPods/Ui/ConnectionShortcut.cs" Link="ConnectionShortcut.cs" />
+    <Compile Include="../../../src/WPods/Core/ConnectionTimeline.cs" Link="ConnectionTimeline.cs" />
     <Compile Include="../../../src/WPods/Ui/Hotkeys.cs" Link="Hotkeys.cs" />
   </ItemGroup>
 </Project>

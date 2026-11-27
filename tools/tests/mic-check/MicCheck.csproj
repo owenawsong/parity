@@ -7,5 +7,6 @@
     <Compile Include="../../../src/WPods/Audio/AudioEndpoints.cs" Link="AudioEndpoints.cs" />
     <Compile Include="../../../src/BluetoothServiceIdentity.cs" />
     <Compile Include="../../../src/WPods/Audio/MicCheck.cs" Link="MicCheck.cs" />
+    <Compile Include="../../../src/WPods/Audio/MicSampleOutput.cs" Link="MicSampleOutput.cs" />
   </ItemGroup>
 </Project>

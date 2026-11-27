@@ -10,10 +10,11 @@
 .wp-popup__device { --popup-reading-height: 40px; width: 100%; gap: 3px; }
 .wp-popup__artwork .wp-popup__art:is(svg) { justify-self: center; width: 100%; }
 .wp-popup__art--hardware { display: grid; align-items: center; }
+.wp-popup__artwork .wp-popup__art--headphone { object-fit: contain; width: 100%; padding: 3px 0; }
 .wp-popup__hardware-buds, .wp-popup__hardware-case { position: absolute; translate: -50%; }
 .wp-popup__hardware-buds { left: 21%; width: 35%; display: flex; justify-content: space-around; align-items: center; }
 .wp-popup__hardware-buds img { width: 39%; height: auto; }
-.wp-popup__hardware-case { left: 72.7%; width: 47%; height: auto; }
+.wp-popup__hardware-case { left: 72.7%; width: 47%; height: auto; max-height: 96%; object-fit: contain; }
 .wp-popup__offer:is([data-state='connecting'],[data-state='autoConnecting']) .wp-popup__device { opacity: 1; }
 .wp-popup__offer[data-state='failed'] .wp-popup__artwork .wp-popup__art { opacity: 1; }
 .wp-popup__reading-slot:has(> [hidden]) { display: none; }
@@ -74,13 +75,11 @@
   .wp-popup--presented :is(.wp-popup__offer-id,.wp-popup__head) { animation: wp-popup-arrive 185ms var(--ease-enter) both; }
   .wp-popup--presented :is(.wp-popup__device,.wp-popup__list) { animation: wp-popup-arrive 245ms var(--ease-enter) 15ms both; }
   .wp-popup--presented .wp-popup__actions { animation: wp-popup-arrive 200ms var(--ease-enter) 40ms both; }
-  .wp-popup--leaving :is(.wp-popup__device,.wp-popup__list,.wp-popup__actions,.wp-popup__offer-id,.wp-popup__head) { animation: wp-popup-depart 160ms ease-in both; }
   .wp-popup__retry-note:not([hidden]) { animation: wp-popup-arrive 150ms var(--ease-enter) both; }
   .wp-popup__action-status::after { animation: wp-popup-working 1300ms ease-in-out infinite; }
   .wp-popup__offer[data-state='connected'] .wp-popup__done .wp-icon { animation: wp-popup-check 220ms ease-out both; }
 }
 @keyframes wp-popup-arrive { from { opacity: .2; transform: translateY(5px); } to { opacity: 1; transform: none; } }
-@keyframes wp-popup-depart { to { opacity: .15; transform: translateY(4px); } }
 @keyframes wp-popup-working { from { transform: translateX(-105%); } to { transform: translateX(365%); } }
 @keyframes wp-popup-check { from { transform: scale(.72); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {

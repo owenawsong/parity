@@ -36,7 +36,14 @@ $installedFolder = if ($Live) { 'Pairside' } else { 'Pairside Preview' }
 $install = Join-Path (Join-Path $programs 'Programs') $installedFolder
 if ($StageDirectory) { $install = [IO.Path]::GetFullPath($StageDirectory) }
 $exe = Join-Path $install 'Pairside.exe'
-if (Get-Process -Name 'Pairside' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }) {
+foreach ($desktopProcess in (Get-Process -Name 'Pairside' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })) {
+    [Threading.EventWaitHandle]$shutdownEvent = $null
+    if ([Threading.EventWaitHandle]::TryOpenExisting("Local\Parity.Shutdown.$($desktopProcess.Id)", [ref]$shutdownEvent)) {
+        try { [void]$shutdownEvent.Set() }
+        finally { $shutdownEvent.Dispose() }
+        if ($desktopProcess.WaitForExit(12000)) { continue }
+    }
+    if ($desktopProcess.HasExited) { continue }
     throw "Quit $appName from its tray menu before updating the desktop app."
 }
 

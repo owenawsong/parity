@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { jsxDomPlugin } from '../tools/jsx-dom.mjs';
-import { appArtwork, bundledHardware, popupAssets } from '../tools/popup-assets.mjs';
+import { appArtwork, bundledHardware, bundledModels, popupAssets } from '../tools/popup-assets.mjs';
 
 const src = new URL('../src/', import.meta.url);
 const useLocal = process.argv.includes('--local-pro3-art');
@@ -15,7 +15,10 @@ const [art, popups] = useLocal
       popupAssets(fileURLToPath(buildDir), inlineAsset),
     ])
   : [null, null];
-const hardware = art?.hardware ?? await bundledHardware(fileURLToPath(new URL('assets/parity-pro3/', src)), inlineAsset);
+const shippedPro3 = await bundledHardware(fileURLToPath(new URL('assets/parity-pro3/', src)), inlineAsset);
+const hardware = art?.hardware ?? shippedPro3;
+const modelArt = await bundledModels(fileURLToPath(new URL('assets/parity-models/', src)), inlineAsset);
+modelArt['AirPods Pro 3'] = shippedPro3;
 const posters = popups ? Object.fromEntries(Object.entries(popups).map(([model, art]) => [model, art.standard.poster])) : null;
 const file = (relative) => fileURLToPath(new URL(relative, src));
 const scriptLiteral = (value) => JSON.stringify(value).replaceAll('<', '\\u003c');
@@ -36,11 +39,18 @@ const bundle = async (entry, define) => {
 const [app, popup, css, host, popupHost, html, previewCss, controls, popupHtml, locale] = await Promise.all([
   bundle('main.tsx', {
     PRO3_HOME_ART: JSON.stringify(hardware),
+    AIRPODS_MODEL_ART: JSON.stringify(modelArt),
+    OWNER_PREVIEW: JSON.stringify(process.argv.includes('--owner-preview')),
     AIRPODS_HOME_POSTERS: JSON.stringify(posters),
     AIRPODS_CONNECT_MOTION: JSON.stringify(art?.connections ?? null),
-    PRO3_WAITING_MOTION: JSON.stringify(art?.waiting ?? null),
+    AIRPODS_WAITING_MOTION: JSON.stringify(art?.waiting ?? null),
+    AIRPODS_LOCAL_ART: JSON.stringify(art?.localHardware ?? null),
+    AIRPODS_LOCAL_POPUPS: JSON.stringify(popups),
   }),
-  bundle('popup/popup.tsx', { AIRPODS_LOCAL_POPUPS: JSON.stringify(popups), PRO3_HOME_ART: JSON.stringify(hardware) }),
+  bundle('popup/popup.tsx', {
+    AIRPODS_LOCAL_POPUPS: JSON.stringify(popups), PRO3_HOME_ART: JSON.stringify(hardware),
+    AIRPODS_MODEL_ART: JSON.stringify(modelArt), AIRPODS_LOCAL_ART: JSON.stringify(art?.localHardware ?? null),
+  }),
   readFile(new URL('../../src/WPods/web/app.css', import.meta.url), 'utf8'),
   readFile(new URL('./host.js', import.meta.url), 'utf8'),
   readFile(new URL('./popup-host.js', import.meta.url), 'utf8'),

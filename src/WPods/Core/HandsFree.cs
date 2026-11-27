@@ -10,8 +10,9 @@ internal static unsafe class HandsFree
     /// <summary><paramref name="changing"/> runs just before Windows is asked to change the service (not when it is already in that state).</summary>
     /// <exception cref="Win32Exception">Windows rejected the change.</exception>
     /// <exception cref="InvalidOperationException">The device is not paired on any radio.</exception>
-    public static void SetEnabled(ulong address, bool enabled, Action? changing = null)
+    public static bool SetEnabled(ulong address, bool enabled, Func<bool> stillWanted, Action? changing = null)
     {
+        if (!stillWanted()) return false;
         if (!Native.TryFindPairedDevice(address, out nint radio, out Native.BluetoothDeviceInfo device))
         {
             throw new InvalidOperationException("Windows could not find this paired AirPods device on any Bluetooth radio.");
@@ -20,24 +21,25 @@ internal static unsafe class HandsFree
         {
             if (TryIsEnabled(radio, device, out bool current, out _) && current == enabled)
             {
-                return;
+                return true;
             }
+            if (!stillWanted()) return false;
             changing?.Invoke();
             uint result = Native.BluetoothSetServiceState(radio, device, Service, enabled ? 1u : 0u);
             // Windows may report the already-applied state as E_INVALIDARG, or race the state query and return
             // ERROR_INVALID_PARAMETER; confirm the requested state before treating the latter as done.
             if (result is Native.ErrorSuccess or Native.EInvalidArg)
             {
-                return;
+                return true;
             }
             if (result == Native.ErrorInvalidParameter && TryIsEnabled(radio, device, out current, out _) && current == enabled)
             {
-                return;
+                return true;
             }
             uint queryResult = 0;
             if (!enabled && TryIsEnabled(radio, device, out current, out queryResult) && !current)
             {
-                return;
+                return true;
             }
             string details = enabled ? string.Empty : $" Profile-state query returned 0x{queryResult:X8}.";
             throw new Win32Exception(unchecked((int)result),

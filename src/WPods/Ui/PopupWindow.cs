@@ -92,7 +92,7 @@ internal sealed class PopupWindow : Form
     private void RunMotionFrame()
     {
         bool entering = _motionTo > _motionFrom;
-        double duration = entering ? 265 : 185;
+        double duration = entering ? 265 : 205;
         double t = Stopwatch.GetElapsedTime(_motionStarted).TotalMilliseconds /
             (duration * Math.Max(.45, Math.Abs(_motionTo - _motionFrom)));
         if (t >= 1)
@@ -100,7 +100,7 @@ internal sealed class PopupWindow : Form
             FinishMotion();
             return;
         }
-        double eased = entering ? 1 - Math.Pow(1 - t, 3) : t * t;
+        double eased = entering ? 1 - Math.Pow(1 - t, 3) : Math.Pow(t, 1.65);
         _reveal = _motionFrom + (_motionTo - _motionFrom) * eased;
         ApplyMotionFrame();
     }

@@ -76,3 +76,36 @@ A bench measurement on the Windows route can establish a calibration for a speci
 3. With the earbuds in the fixture, play a fixed 1 kHz tone at conservative levels. At a fixed Windows gain, change the signal amplitude by a known amount. Then hold the signal amplitude fixed and change the Windows gain. Log each ear’s loopback RMS and simultaneous microphone LAeq over the same steady interval. Repeat across at least three intended gains. Use the measured paired changes to identify where gain enters the calculation.
 4. Repeat with a documented broadband signal and independent reseatings. Keep a separate signal, gain and reseating out of the calibration fit. Compare the estimate against the simulator separately for each ear on these held-out trials. Report the maximum absolute discrepancy, reseating spread, calibration drift, spectrum and tested gain range.
 5. Identify the acoustic reference plane. An ear-simulator measurement gives sound pressure at the simulator microphone. For a safe-listening exposure estimate, apply and document the appropriate reference-field correction and validate it on broadband material. Leave any unmeasured mode, playback profile or volume range uncalibrated. [ITU-T H.870 safe listening guidelines](https://www.itu.int/rec/T-REC-H.870/en)
+
+### Pro 3 playback probe and calibrated prototype
+
+A read-only probe of the active Pro 3 endpoint captured both channels of existing playback. In the observed windows it measured roughly −28 to −23 dBFS(A), with Windows reporting about −10.9 dB of master gain. There was no simultaneous acoustic reference, so these observations establish signal and gain coverage on the physical Bluetooth route.
+
+The most recent Windows control session also reported settings `0x37 = 0x00` and `0x38 = 0x52`. CAPod's Pro 3 captures identify these as the limit switch and configured level. `0x52` represents a configured 82 dBA limit, which is independent of the changing playback level. A separate eight-second probe included a transition from idle to playback and logged one distinct control packet, `0x000E`, which public protocol notes identify as an audio-source response. The session log deduplicates identical control traffic. These checks cover the observed Windows session and leave private Apple-host telemetry unresolved. [CAPod's captured setting analysis](https://git.tysstech.com/TySS-Dev/capod/commit/26b04854c470fa7c7dc1754f38c7c754c8a935db) · [AACP opcode research](https://github.com/arctumn/ntpods/blob/main/docs/opcodes.md)
+
+The probe accepts paired Windows and acoustic measurements from a calibrated bench. Record A-weighted equivalent levels on both ears for the same steady playback windows. The uncalibrated probe prints timestamps, stereo signal, sample rate and master and per-channel gain. Use steady windows with continuous playback, unchanged gains and mute off. Record the model, firmware, output route, fixture and processing state in `setup`. Use `ear-simulator` for levels measured at the fixture and `diffuse-field-corrected` only for measurements with the documented correction applied.
+
+```powershell
+$sdk = '.build/dotnet/dotnet.exe'
+& $sdk run --project tools/headphone-level -c Release -- --validate-calibration measurements.json
+& $sdk run --project tools/headphone-level -c Release -- --endpoint '<same render endpoint ID>' --seconds 10 --calibration measurements.json
+```
+
+Example structure with **synthetic measurements**, for checking the input format only.
+
+```json
+{
+  "endpointId": "example",
+  "sampleRate": 48000,
+  "referencePlane": "ear-simulator",
+  "setup": "Synthetic example",
+  "trials": [
+    {"id":"fit-1","signal":"tone","holdout":false,"gain":{"masterDb":-10,"leftDb":-10,"rightDb":-13},"leftDbFs":-40,"rightDbFs":-44,"leftDba":53,"rightDba":45},
+    {"id":"fit-2","signal":"tone","holdout":false,"gain":{"masterDb":-10,"leftDb":-10,"rightDb":-13},"leftDbFs":-10,"rightDbFs":-14,"leftDba":83,"rightDba":75},
+    {"id":"test-1","signal":"program simulation","holdout":true,"gain":{"masterDb":-10,"leftDb":-10,"rightDb":-13},"leftDbFs":-35,"rightDbFs":-39,"leftDba":59,"rightDba":49},
+    {"id":"test-2","signal":"speech","holdout":true,"gain":{"masterDb":-10,"leftDb":-10,"rightDb":-13},"leftDbFs":-15,"rightDbFs":-19,"leftDba":77,"rightDba":71}
+  ]
+}
+```
+
+Each gain state gets a separate offset per ear. The bench comparison therefore accounts for attenuation already in the loopback signal. A state must have at least two fitting trials and two held-out trials using signals excluded from the fit. Validation must span at least 6 dB within the fit range on each side. The tool reports the worst held-out error and rejects a constant-offset model if any fit or validation trial differs by more than 3 dB. That threshold is a research gate for the supplied trials. A live estimate requires the same endpoint, sample rate, master and per-channel gains, and a signal level inside the held-out range. The bench operator is responsible for matching the firmware, fit and processing state. To evaluate broader release use, repeat the tests across content, reseatings, processing modes, physical units and playback routes. [ITU-T H.870 measurement method](https://www.itu.int/rec/T-REC-H.870/en)

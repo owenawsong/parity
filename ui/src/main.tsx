@@ -5,7 +5,7 @@ import { createToast } from './components/toast';
 import { createSettingsSearch, type SearchTarget } from './components/settingsSearch';
 import { createAnnouncer, createFrame, setAttr, setHidden, setText } from './dom';
 import { isPairside, listen, post } from './host';
-import { t, type LabelKey } from './i18n';
+import { bindAttr, t, type LabelKey } from './i18n';
 import { Glyph, Icon, type IconName } from './icons';
 import { createCaseFinder } from './pages/caseFinder';
 import { createAudioMotion } from './pages/audioMotion';
@@ -28,6 +28,7 @@ import { createRestartNeeded } from './pages/restartNeeded';
 import { createAppearance } from './pages/appearance';
 import { createAdvancedSettings } from './pages/advancedSettings';
 import { createWindowsSettings } from './pages/windowsSettings';
+import { createOwnerPreview } from './pages/ownerPreview';
 import type { HostToMain } from './protocol';
 import { apply, current, dirty, mark, type Section, store } from './state';
 
@@ -54,6 +55,9 @@ const ROUTES: Record<PageName, Route> = {
     title: 'nav.preferences',
     parent: 'home',
   },
+  ownerPreview: OWNER_PREVIEW
+    ? { create: createOwnerPreview, title: 'nav.ownerPreview', parent: 'home' }
+    : { create: createEmpty, title: null, parent: null },
   appearance: { create: createAppearance, title: 'windows.appearance', parent: 'windows' },
   advanced: { create: createAdvancedSettings, title: 'overview.advanced', parent: 'windows' },
   language: { create: createLanguage, title: 'lang.title', parent: 'windows' },
@@ -76,7 +80,9 @@ let navDir = 0;
 let micSetupParent: PageName = 'home';
 let batteryParent: 'home' | 'windows' = 'home';
 let enhancementParent: PageName = 'home';
+let advancedParent: 'home' | 'windows' = 'windows';
 const scrollPositions = new Map<PageName, number>();
+const appPages = new Set<PageName>(['windows', 'appearance', 'language', 'pair', 'legal']);
 
 const schedule = createFrame(() => {
   render();
@@ -84,9 +90,17 @@ const schedule = createFrame(() => {
 const ctx: Ctx = {
   go: (page, anchor) => {
     if (anchor) pendingSearch = { page, anchor };
+    if (page === shown) {
+      requested = page;
+      fromNavigation = false;
+      navDir = 0;
+      if (pendingSearch) schedule();
+      return;
+    }
     if (page === 'enhancement') enhancementParent = shown ?? 'home';
     if (page === 'micSetup') micSetupParent = shown ?? 'home';
     if (page === 'battery') batteryParent = shown === 'windows' ? 'windows' : 'home';
+    if (page === 'advanced') advancedParent = shown === 'home' ? 'home' : 'windows';
     requested = page;
     navDir = 1;
     if (page !== 'home' && document.documentElement.dataset.presentation === 'tray') {
@@ -101,7 +115,7 @@ const ctx: Ctx = {
 };
 const parentOf = (page: PageName): PageName | null =>
   page === 'micSetup' ? micSetupParent : page === 'battery' ? batteryParent :
-  page === 'enhancement' ? enhancementParent : ROUTES[page].parent;
+  page === 'enhancement' ? enhancementParent : page === 'advanced' ? advancedParent : ROUTES[page].parent;
 const back = (): void => {
   if (!shown) {
     return;
@@ -138,10 +152,11 @@ const noDrag = (e: MouseEvent): void => {
   e.stopPropagation();
 };
 document.title = isPairside ? 'Parity' : 'WPods';
-type Destination = DevicePage | 'home' | 'windows';
+type Destination = DevicePage | 'home' | 'windows' | 'ownerPreview';
 const destinations: { page: Destination; label: LabelKey; icon: IconName }[] = [
   { page: 'home', label: 'nav.overview', icon: 'overview' },
   ...sidebarPages,
+  ...(OWNER_PREVIEW ? [{ page: 'ownerPreview', label: 'nav.ownerPreview', icon: 'preview-wave' } as const] : []),
   { page: 'windows', label: 'nav.preferences', icon: 'preferences' },
 ];
 let fromNavigation = false;
@@ -177,6 +192,7 @@ const destinationButtons = destinations.map(({ page, label, icon }) => {
       <span class="wp-destination__label" l:text={label} />
     </button>
   ) as HTMLButtonElement;
+  bindAttr(button, 'title', label);
   if (page === 'micSetup') button.append(<span class="wp-destination__short" l:text="nav.micShort" />);
   button.dataset.destination = page;
   return { page, button, plate };
@@ -184,33 +200,21 @@ const destinationButtons = destinations.map(({ page, label, icon }) => {
 const navigation = (
   <nav class="wp-destinations" hidden l:aria-label="nav.workspace" />
 ) as HTMLElement;
-const narrowNav = document.createElement('select');
-narrowNav.className = 'wp-narrow-nav';
-narrowNav.addEventListener('change', () => {
-  const target = destinationButtons.find(item => item.page === narrowNav.value);
-  target?.button.click();
-});
-const narrowOptions = destinationButtons.map(({ page }) => {
-  const option = document.createElement('option');
-  option.value = page;
-  narrowNav.append(option);
-  return option;
-});
-navigation.append(narrowNav, ...destinationButtons.map(({ button }) => button));
-const isWorkspace = (): boolean => isPairside && !!current() && !store.firstRun &&
+const isWorkspace = (): boolean => isPairside && (OWNER_PREVIEW || !!current() || !!shown && appPages.has(shown)) && !store.firstRun &&
   !store.restartPending && !store.adapterUnsupported;
 const destinationOf = (page: PageName | null): Destination => {
   switch (page) {
     case 'battery': return batteryParent;
-    case 'pulse': case 'controls': case 'audioMotion': case 'micSetup': case 'windows': return page;
+    case 'pulse': case 'controls': case 'audioMotion': case 'micSetup': case 'windows': case 'ownerPreview': return page;
     case 'pair': case 'caseFinder': case 'legal': case 'language': return 'windows';
     case 'hotkeys': return 'controls';
-    case 'appearance': case 'advanced': case 'mixer': return 'windows';
+    case 'advanced': return advancedParent;
+    case 'appearance': case 'mixer': return 'windows';
     case 'enhancement': return 'micSetup';
     default: return 'home';
   }
 };
-let appliedOrder = '';
+let appliedOrder: string | undefined;
 let activeDestination: HTMLButtonElement | null = null;
 let navAnimation: Animation | undefined;
 let activePlate: HTMLElement | undefined;
@@ -222,7 +226,7 @@ const renderNavigation = (): void => {
   setHidden(searchButton, Boolean(navigation.hidden));
   if (navigation.hidden && finder.dialog.open) finder.dialog.close();
   searchButton.title = t('search.title') + ' (Ctrl+K)';
-  if (!device || navigation.hidden) {
+  if (navigation.hidden) {
     navAnimation?.cancel();
     activeDestination = null;
     activePlate = undefined;
@@ -232,22 +236,17 @@ const renderNavigation = (): void => {
   const orderKey = store.sidebarOrder.join('/');
   if (appliedOrder !== orderKey) {
     appliedOrder = orderKey;
-    const order = ['home', ...orderedPages(store.sidebarOrder).map(item => item.page), 'windows'];
+    const order = ['home', ...orderedPages(store.sidebarOrder).map(item => item.page),
+      ...(OWNER_PREVIEW ? ['ownerPreview'] : []), 'windows'];
     for (const page of order) {
-      const index = destinationButtons.findIndex(item => item.page === page);
-      navigation.append(destinationButtons[index].button);
-      narrowNav.append(narrowOptions[index]);
+      const destination = destinationButtons.find(item => item.page === page);
+      if (destination) navigation.append(destination.button);
     }
   }
-  setAttr(narrowNav, 'aria-label', t('nav.workspace'));
-  for (const [index, { page, button, plate }] of destinationButtons.entries()) {
-    const supported = page !== 'pulse' || device.capSet.has('heartRate') || selected === 'pulse';
+  for (const { page, button, plate } of destinationButtons) {
+    const supported = page === 'home' || page === 'windows' || page === 'ownerPreview' ||
+      (!!device && (page !== 'pulse' || device.capSet.has('heartRate') || selected === 'pulse'));
     setHidden(button, !supported);
-    narrowOptions[index].hidden = !supported;
-    narrowOptions[index].disabled = !supported;
-    setText(narrowOptions[index], t(destinations[index].label));
-    narrowOptions[index].selected = page === selected;
-    button.title = button.getAttribute('aria-label') ?? '';
     setAttr(button, 'aria-current', selected === page ? (shown === page ? 'page' : 'location') : null);
     if (page === selected && activeDestination !== button) {
       const prev = !quietMotion.matches && activePlate?.checkVisibility() ? activePlate.getBoundingClientRect() : null;
@@ -442,7 +441,7 @@ const renderPage = (): void => {
             ? requested === 'language'
               ? 'language'
               : 'unsupported'
-            : store.devices.length === 0
+            : store.devices.length === 0 && !appPages.has(requested) && !(OWNER_PREVIEW && requested === 'ownerPreview')
               ? 'empty'
               : requested;
   if (
@@ -454,6 +453,8 @@ const renderPage = (): void => {
     requested = 'home';
   }
   if (top === shown) {
+    fromNavigation = false;
+    navDir = 0;
     return;
   }
   const left = shown;
@@ -500,7 +501,7 @@ const renderPage = (): void => {
     const trigger = b.page.returnFocus?.(left);
     const navButton = destinationButtons.find(({ page, button }) => page === left && !button.hidden)?.button ??
       destinationButtons.find(({ page }) => page === destinationOf(top))?.button;
-    (trigger?.checkVisibility() ? trigger : narrowNav.checkVisibility() ? narrowNav : navButton)?.focus({ preventScroll: true });
+    (trigger?.checkVisibility() ? trigger : navButton)?.focus({ preventScroll: true });
   }
   fromNavigation = false;
   navDir = 0;
@@ -558,6 +559,7 @@ const render = (): void => {
   if (
     shown &&
     (current() ||
+      appPages.has(shown) ||
       shown === 'firstRun' ||
       shown === 'empty' ||
       shown === 'unsupported' ||
@@ -570,12 +572,13 @@ const render = (): void => {
     }
   }
   if (updateNavigation) renderNavigation();
+  if (updateNavigation || dirty.has('features') || dirty.has('mic') || dirty.has('windows')) finder.refresh();
   if (pendingSearch) {
     const { page, anchor } = pendingSearch;
     pendingSearch = null;
     if (shown === page) {
       const target = anchor && pageOf(page).page.anchors?.[anchor];
-      if (target) {
+      if (target && !target.closest('[hidden]')) {
         for (let parent: HTMLElement | null = target; parent; parent = parent.parentElement) {
           if (parent instanceof HTMLDetailsElement && !parent.open) {
             const section = parent;
@@ -590,7 +593,10 @@ const render = (): void => {
         if (!matchMedia('(prefers-reduced-motion: reduce)').matches)
           target.animate([{ outline: '2px solid var(--accent-text)', outlineOffset: '2px' },
             { outline: '2px solid transparent', outlineOffset: '2px' }], { duration: 700 });
-      } else if (detailHeading.isConnected) detailHeading.focus({ preventScroll: true });
+      } else if (detailHeading.isConnected) {
+        body.scrollTop = 0;
+        detailHeading.focus({ preventScroll: true });
+      }
     }
   }
   dirty.clear();
@@ -626,7 +632,7 @@ const onMessage = (msg: HostToMain): void => {
   }
   applyCommon(msg, onMessage);
   apply(msg);
-  schedule();
+  if (dirty.size || store.toast || store.announce || store.relabel) schedule();
 };
 listen<HostToMain>(onMessage);
 

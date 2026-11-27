@@ -51,6 +51,26 @@ export async function bundledHardware(dir, urlFor) {
   ])));
 }
 
+export async function bundledModels(assetRoot, urlFor) {
+  const families = {
+    classic: ['AirPods 1', 'AirPods 2'],
+    airpods3: ['AirPods 3'],
+    airpods4: ['AirPods 4', 'AirPods 4 (ANC)', 'AirPods 5'],
+    pro1: ['AirPods Pro 1'],
+    pro2: ['AirPods Pro 2'],
+    max: ['AirPods Max', 'AirPods Max 1', 'AirPods Max 2'],
+  };
+  const results = await Promise.all(Object.entries(families).map(async ([family, models]) => {
+    const parts = family === 'max' ? { headphone: 'headphone' } :
+      { left: 'left', right: 'right', case: 'case', ...(family === 'classic' ? {} : { caseCharging: 'case-charging' }) };
+    const art = Object.fromEntries(await Promise.all(Object.entries(parts).map(async ([part, file]) => [
+      part, await urlFor(path.join(assetRoot, family, `${file}.webp`), 'poster', `${family}-${file}.webp`),
+    ])));
+    return models.map(model => [model, art]);
+  }));
+  return Object.fromEntries(results.flat());
+}
+
 export const appArtwork = async (buildDir, urlFor) => {
   const entries = { left: 'pro3-left', right: 'pro3-right', case: 'pro3-case', caseCharging: 'pro3-case-charging' };
   const hardware = await Promise.all(Object.entries(entries).map(async ([part, file]) => {
@@ -64,6 +84,7 @@ export const appArtwork = async (buildDir, urlFor) => {
     throw error;
   });
   const liftOut = path.join(buildDir, 'pro3-connect', 'lift-out.webm');
+  const overviewDir = path.join(buildDir, 'airpods-overview');
   const waitingFiles = ['pro3-opening.webm', 'pro3-waiting.webm', 'pro3-opening.webp']
     .map((file) => path.join(path.dirname(liftOut), file));
   const [index, pro3, waiting] = await Promise.all([
@@ -82,5 +103,30 @@ export const appArtwork = async (buildDir, urlFor) => {
     return [model, await urlFor(path.join(connectionDir, file), 'video')];
   }));
   if (pro3) connections.push(['AirPods Pro 3', pro3]);
-  return { hardware: Object.fromEntries(hardware), connections: Object.fromEntries(connections), waiting };
+  const localIndex = await readOptional(readFile(path.join(overviewDir, 'index.json'), 'utf8').then(JSON.parse), {});
+  const connectionMap = Object.fromEntries(connections);
+  const waitingMap = waiting ? { 'AirPods Pro 3': { ...waiting, aligned: true, cue: 236 / 60 } } : {};
+  const localHardware = { 'AirPods Pro 3': Object.fromEntries(hardware) };
+  const resolve = async (file, kind) => {
+    const ext = kind === 'video' ? '.webm' : '.webp';
+    if (typeof file !== 'string' || path.basename(file) !== file || !file.endsWith(ext)) {
+      throw new Error(`Invalid local Overview filename: ${file}`);
+    }
+    return urlFor(path.join(overviewDir, file), kind);
+  };
+  await Promise.all(Object.entries(localIndex).map(async ([model, entry]) => {
+    if (model !== 'AirPods Pro 3') {
+      localHardware[model] = Object.fromEntries(await Promise.all(Object.entries(entry.art).map(async ([part, file]) =>
+        [part, await resolve(file, 'poster')])));
+    }
+    if (entry.waiting) {
+      const [intro, loop, poster] = await Promise.all([
+        resolve(entry.waiting.intro, 'video'), resolve(entry.waiting.loop, 'video'), resolve(entry.waiting.poster, 'poster'),
+      ]);
+      waitingMap[model] = { intro, loop, poster, cue: Number.isFinite(entry.cue) ? entry.cue : null };
+    }
+    if (entry.art.headphone) delete connectionMap[model];
+    else if (entry.success) connectionMap[model] = await resolve(entry.success, 'video');
+  }));
+  return { hardware: Object.fromEntries(hardware), connections: connectionMap, waiting: waitingMap, localHardware };
 };

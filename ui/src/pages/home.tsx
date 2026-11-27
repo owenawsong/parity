@@ -1,9 +1,11 @@
 // Device overview, live listening controls, and model-specific tools.
 import { createNowPlaying } from '../components/nowPlaying';
+import { playbackNotice } from '../components/playbackNotice';
 import { createActivityChart } from '../components/activityChart';
-import { createBatteries } from '../components/batteryReadings';
+import { CASE_BROADCAST_FRESH_MS, createBatteries } from '../components/batteryReadings';
 import { createBusy } from '../components/common';
 import { createDeviceMenu } from '../components/deviceMenu';
+import { createConnectionDisclosure } from '../components/connectionCheck';
 import { createConnectionMotion } from '../components/connectionMotion';
 import { createHeroMotion } from '../components/heroMotion';
 import { createSegmented } from '../components/segmented';
@@ -17,9 +19,11 @@ import {
   setText,
 } from '../dom';
 import { isPairside, post } from '../host';
+import { finishArtworkKey, hardwareArt, overviewMotion } from '../hardwareArt';
 import { t } from '../i18n';
 import { Art, Glyph, Icon, Spinner } from '../icons';
 import type {
+  BatteryPart,
   Conn,
   DeviceId,
   ListeningMode,
@@ -43,6 +47,7 @@ const STATUS_KIND: Record<Conn, string> = {
   notConnected: 'disconnected',
   attachFailed: 'disconnected',
   elsewhere: 'disconnected',
+  available: 'disconnected',
   connecting: 'busy',
   reconnecting: 'busy',
 };
@@ -68,14 +73,10 @@ export const createHome = (ctx: Ctx): Page => {
   offlinePoster.alt = '';
   const offlineBuds = document.createElement('div');
   offlineBuds.className = 'wp-offline-buds';
-  if (PRO3_HOME_ART) {
-    for (const source of [PRO3_HOME_ART.left, PRO3_HOME_ART.right]) {
-      const image = new Image();
-      image.alt = '';
-      image.src = source;
-      offlineBuds.append(image);
-    }
-  }
+  const offlineLeft = new Image();
+  const offlineRight = new Image();
+  offlineLeft.alt = offlineRight.alt = '';
+  offlineBuds.append(offlineLeft, offlineRight);
   let deviceControls!: HTMLDivElement;
   let updateNote!: HTMLElement;
   let updateNoteText!: HTMLParagraphElement;
@@ -114,15 +115,22 @@ export const createHome = (ctx: Ctx): Page => {
     ctx.update('hero', 'menu', 'nc', 'mic', 'features', 'controls', 'windows');
   });
   let batteryTrigger = store.batteryPart;
-  const batteries = createBatteries(isPairside ? (part) => {
+  const openBattery = isPairside ? (part: BatteryPart) => {
     batteryTrigger = part;
     store.batteryPart = part;
     ctx.go('battery');
-  } : undefined);
-  const nearbyLevels = createBatteries();
+  } : undefined;
+  const batteries = createBatteries(openBattery);
+  const nearbyLevels = createBatteries(openBattery);
+  let caseReadingExpiry: number | undefined;
   nearbyLevels.el.classList.add('wp-nearby-levels');
   nearbyLevels.el.hidden = true;
   const nowPlaying = createNowPlaying();
+  const diagnostics = createConnectionDisclosure(
+    <button type="button" class="wp-link wp-recovery__report" l:text="diagnostics.report"
+      onclick={() => ctx.go('advanced', 'connectionReport')} /> as HTMLButtonElement,
+  );
+  let recovery!: HTMLElement;
   let dashboard!: HTMLDivElement;
   let playerDevice: DeviceId | null = null;
   let outputRow!: HTMLDivElement;
@@ -130,16 +138,14 @@ export const createHome = (ctx: Ctx): Page => {
   let outputButton!: HTMLButtonElement;
   let outputDevice: DeviceId | null = null;
   const renderOutput = (): void => {
-    const name = outputDevice && outputDevice === current()?.id && outputDevice === store.attached
-      ? store.otherOutput : null;
-    if (!name && outputRow.contains(document.activeElement)) {
+    const notice = playbackNotice(outputDevice === current()?.id ? outputDevice : null);
+    if (!notice && outputRow.contains(document.activeElement)) {
       (actions.hidden ? menu.title : action).focus({ preventScroll: true });
     }
-    setText(outputName, name ?? '');
-    const state = store.outputAction;
-    setText(outputButton, t(state === 'settings' ? 'mic.soundSettings' : state === 'switching' ? 'home.switchingOutput' : 'home.useAirPods'));
-    setDisabled(outputButton, state === 'switching');
-    setHidden(outputRow, !name);
+    setText(outputName, notice?.text ?? '');
+    setText(outputButton, notice?.action ?? '');
+    setDisabled(outputButton, notice?.switching === true);
+    setHidden(outputRow, !notice);
   };
   const activity = createActivityChart(
     () => playerDevice !== null && playerDevice === current()?.id,
@@ -298,30 +304,37 @@ export const createHome = (ctx: Ctx): Page => {
               if (!d) {
                 return;
               }
-              if (d.conn === 'connected') {
+              if (d.conn === 'connecting' || cancelDevice === d.id) {
+                post({ type: 'cancel', id: d.id });
+              } else if (d.conn === 'connected') {
                 disconnectDevice();
               } else {
-                post({
-                  type: d.conn === 'connecting' ? 'cancel' : 'connect',
-                  id: d.id,
-                });
+                post({ type: 'connect', id: d.id });
               }
             }}
           />
         </div>
       </section>
 
+      <section class="wp-recovery" aria-labelledby="connectionRecoveryTitle" ref={recovery} hidden>
+        <h2 id="connectionRecoveryTitle" l:text="home.controlsFailed" />
+        <p l:text="home.controlsRecovery" />
+        {diagnostics.el}
+      </section>
+
       <div class="wp-output-route" ref={outputRow} hidden>
         <Icon name="speaker" />
-        <div class="wp-output-route__device">
+        <div class="wp-output-route__device" role="status">
           <span l:text="home.windowsOutput" />
           <strong ref={outputName} />
         </div>
         <button type="button" class="wp-link wp-focusable" ref={outputButton}
           onclick={() => {
             if (!outputDevice || current()?.id !== outputDevice) return;
-            if (store.outputAction === 'settings') post({ type: 'openSoundSettings' });
-            else post({ type: 'usePairOutput', id: outputDevice });
+            const notice = playbackNotice(outputDevice);
+            if (!notice || notice.switching) return;
+            if (notice.usePair) post({ type: 'usePairOutput', id: outputDevice });
+            else post({ type: 'openSoundSettings' });
           }} />
       </div>
       <div class="wp-home__controls">
@@ -339,11 +352,8 @@ export const createHome = (ctx: Ctx): Page => {
                 </div>
               </div>
             </section>
-
-
           </div>
         </div>
-
       </div>
       <div class="wp-overview-dashboard" ref={dashboard} hidden>
         {nowPlaying.el}
@@ -353,6 +363,7 @@ export const createHome = (ctx: Ctx): Page => {
   ) as HTMLDivElement;
 
   const renderHero = (): void => {
+    clearTimeout(caseReadingExpiry);
     const currentDevice = current();
     if (!currentDevice) {
       return;
@@ -374,24 +385,34 @@ export const createHome = (ctx: Ctx): Page => {
     }
     const d = lastNearby ?? currentDevice;
     const conn = d.conn;
-    const offline = conn === 'notConnected';
+    const failed = conn === 'attachFailed';
+    const offline = conn === 'notConnected' || conn === 'available' || failed;
     const nearby = conn === 'elsewhere';
     const st = live(d);
     const pro3 = d.model === 'AirPods Pro 3';
     const connected = conn === 'connected';
-    const hasBuds = pro3 && Boolean(PRO3_HOME_ART);
+    const finish = store.maxFinishes[d.id];
+    const artworkKey = finishArtworkKey(d.model, finish);
+    const deviceArt = hardwareArt(d.model, false, finish);
+    const hasBuds = Boolean(deviceArt?.left && deviceArt.right);
     setHidden(offlineBuds, !hasBuds);
+    setAttr(offlineLeft, 'src', offline ? deviceArt?.left ?? null : null);
+    setAttr(offlineRight, 'src', offline ? deviceArt?.right ?? null : null);
     const knownPosters = AIRPODS_HOME_POSTERS;
-    const offlineSource = offline && !hasBuds && knownPosters && Object.hasOwn(knownPosters, d.model)
-      ? knownPosters[d.model] : null;
+    const offlineSource = offline && !hasBuds
+      ? deviceArt?.headphone ?? (knownPosters && Object.hasOwn(knownPosters, d.model) ? knownPosters[d.model] : null)
+      : null;
     setHidden(offlinePosterFrame, !offlineSource);
     setClass(offlinePosterFrame, 'wp-offline-poster--pair', d.art !== 'max');
     setAttr(offlinePoster, 'src', offlineSource);
     const ready = connected && st?.ready === true;
+    const fullWindow = document.documentElement.dataset.presentation !== 'tray';
+    const showRecovery = isPairside && fullWindow && failed && !store.desktopOnly;
     const canAnimate = !reducedMotion.matches && !document.hidden && !document.body.classList.contains('is-hidden');
-    const waitingAssets = pro3 ? PRO3_WAITING_MOTION : null;
-    const clips = AIRPODS_CONNECT_MOTION;
-    const clip = clips && Object.hasOwn(clips, d.model) ? clips[d.model] : null;
+    const { waiting: waitingAssets, success } = overviewMotion(artworkKey);
+    const headphones = d.art === 'max';
+    const clip = headphones ? null : success;
+    const alignedMotion = pro3 && (!waitingAssets || waitingAssets.aligned === true);
     const switched = observedDevice !== d.id;
     if (switched) {
       observedDevice = d.id;
@@ -413,12 +434,12 @@ export const createHome = (ctx: Ctx): Page => {
       (connected && !ready && !confirmedConnection && (st?.checking ?? true));
     const revealing = celebrating === d.id;
     const playingWait = (nearby || waiting) && !revealing && canAnimate;
-    const hardware = connected && pro3 ? PRO3_HOME_ART : null;
+    const hardware = connected ? deviceArt : null;
     const waitingPoster = nearby || waiting || revealing ? waitingAssets?.poster : undefined;
     const posters = AIRPODS_HOME_POSTERS;
     const showDevice = connected && !waiting && !revealing;
-    const closedCase = pro3 && !offline && !showDevice
-      ? waitingPoster ?? waitingAssets?.poster ?? PRO3_HOME_ART?.case
+    const closedCase = !offline && !showDevice
+      ? waitingPoster ?? waitingAssets?.poster ?? deviceArt?.case ?? deviceArt?.headphone
       : null;
     if (conn === 'connecting') cancelDevice = d.id;
     else if (!connected || showDevice || cancelDevice !== d.id) cancelDevice = null;
@@ -427,21 +448,25 @@ export const createHome = (ctx: Ctx): Page => {
     const scene = revealing && !lifting && carryCancel ? 'connecting' : revealing ? 'revealing' : waiting ? 'connecting' :
       showDevice ? 'connected' : nearby ? 'nearby' :
       conn === 'attachFailed' ? 'failed' : 'disconnected';
-    const animate = heroMotion.prepare(`${d.id}:${scene}`, scene, hero, heroVisual, menu.title, actions, offlineArtwork);
+    const animate = heroMotion.prepare(`${d.id}:${scene}`, scene, hero, heroVisual, menu.title, actions, offlineArtwork,
+      !clip ? batteries.el : undefined);
     setHidden(offlineArtwork, !offline);
     if (switched || !revealing) connection.reset();
     if (switched || (!playingWait && !revealing)) waitingMotion.reset();
     if (playingWait) {
-      if (waitingAssets) waitingMotion.show(d.id, waitingAssets, document.documentElement.dataset.presentation !== 'tray');
+      if (waitingAssets) {
+        const loop = document.documentElement.dataset.presentation !== 'tray' || headphones;
+        waitingMotion.show(d.id, waitingAssets, loop);
+      }
       if (clip) connection.warm(clip);
     }
     if (revealing && clip) {
       connection.show(d.id, {
         source: clip,
-        aligned: pro3,
+        aligned: alignedMotion,
         cue: () => waitingMotion.cue(d.id),
-        onStart: () => {
-          waitingMotion.reset();
+        onStart: matched => {
+          waitingMotion.finishHandoff(d.id, matched);
           renderHero();
         },
         onEnd: () => {
@@ -455,7 +480,7 @@ export const createHome = (ctx: Ctx): Page => {
     const modelPoster = usePoster && posters && Object.hasOwn(posters, d.model) ? posters[d.model] : null;
     const poster = closedCase ?? modelPoster;
     const onFilm = closedCase && waitingPoster === closedCase;
-    const nextModel = onFilm ? 'opening-pro3' : closedCase ? 'closed-pro3' : modelPoster ? d.model : d.art;
+    const nextModel = onFilm ? `opening:${artworkKey}` : closedCase ? `waiting:${artworkKey}` : modelPoster ? d.model : d.art;
     if (nextModel !== artModel) {
       artModel = nextModel;
       let next: HTMLImageElement | SVGSVGElement;
@@ -477,38 +502,58 @@ export const createHome = (ctx: Ctx): Page => {
     if (!poster) setAttr(art, 'aria-label', t(`art.${d.art}`));
 
     setAttr(status, 'class', `wp-status wp-status--${STATUS_KIND[waiting ? 'connecting' : conn]}`);
-    setClass(status, 'wp-sr', offline || showDevice);
+    setClass(status, 'wp-sr', conn === 'notConnected' || showDevice || showRecovery);
     setText(hardwareModel, d.model);
-    setHidden(hardwareModel, !showDevice || d.name.trim().toLowerCase() === d.model.trim().toLowerCase());
+    setHidden(hardwareModel, !(showDevice || conn === 'notConnected' || showRecovery) || d.name.trim().toLowerCase() === d.model.trim().toLowerCase());
     setText(
       statusText,
       (waiting && connected) || carryCancel ? t('status.connecting')
         : connected ? t('status.connectedModel', { model: d.model })
-        : nearby ? t('status.nearby') : t(`status.${conn}`),
+        : nearby ? t('status.nearby')
+        : failed && isPairside && !store.desktopOnly ? t('home.controlsFailed') : t(`status.${conn}`),
     );
 
     const bat = st?.battery ?? null;
     const single = capsOf(d).has('singleBattery');
+    const broadcast = currentDevice.caseBroadcast;
+    const docked = currentDevice.caseBuds;
+    const now = Date.now();
+    const freshFor = (seenAt: number | undefined): number => seenAt && seenAt <= now ?
+      Math.max(0, CASE_BROADCAST_FRESH_MS - (now - seenAt)) : 0;
+    const budRemaining = single ? 0 : freshFor(docked?.seenAt);
+    const caseRemaining = !single && broadcast?.source === 'case' ? freshFor(broadcast.seenAt) : 0;
+    const caseBuds = budRemaining ? docked : undefined;
+    const outsideCase = (side: Side) => st?.ear[side] === 'inEar' || st?.ear[side] === 'out';
+    const connectedCaseBuds = caseBuds && {
+      ...caseBuds,
+      left: outsideCase('left') ? null : caseBuds.left,
+      right: outsideCase('right') ? null : caseBuds.right,
+    };
+    const refreshAfter = Math.min(budRemaining || Infinity, caseRemaining || Infinity);
+    if (Number.isFinite(refreshAfter)) caseReadingExpiry = window.setTimeout(() => ctx.update('hero'), refreshAfter);
     const any = batteries.update(
       bat,
       { left: earText(st, 'left'), right: earText(st, 'right') },
-      hardware,
+      hardware ?? (headphones && (nearby || waiting) ? deviceArt : null),
       connected && !single ? d.id : undefined,
-      connected && !single ? d.caseBroadcast : undefined,
-      connected && !single ? d.rememberedCase : undefined,
+      connected && !single ? broadcast : undefined,
+      connected && !single ? currentDevice.rememberedCase : undefined,
+      connectedCaseBuds,
     );
     setHidden(batteries.el, !showDevice || !any);
     setHidden(heroVisual, !showArt && !revealing && !(showDevice && any));
     setClass(heroVisual, 'wp-hero__visual--stage', Boolean(onFilm || hardware || revealing || ((waiting || nearby) && poster)));
-    setClass(heroVisual, 'wp-hero__visual--pro3', pro3);
+    setClass(heroVisual, 'wp-hero__visual--pro3', alignedMotion);
+    setClass(heroVisual, 'wp-hero__visual--model-motion', !!waitingAssets && !waitingAssets.aligned);
+    setClass(heroVisual, 'wp-hero__visual--still', !!closedCase && !waitingAssets);
+    setClass(heroVisual, 'wp-hero__visual--headphones', d.art === 'max');
     setClass(heroVisual, 'wp-hero__visual--film', !!onFilm || revealing);
     setClass(heroVisual, 'wp-hero__visual--revealing', revealing);
     setClass(heroVisual, 'wp-hero__visual--settled', showDevice);
-    const fullWindow = document.documentElement.dataset.presentation !== 'tray';
     setClass(hero, 'wp-hero--discovery', nearby || waiting || revealing);
-    if (nearby && fullWindow) {
-      const anyNearby = nearbyLevels.update(d.batteries, { left: '', right: '' }, null,
-        (d.caseBroadcast || d.rememberedCase) && !single ? d.id : undefined, d.caseBroadcast, d.rememberedCase);
+    if (fullWindow && (nearby || offline && (caseBuds || caseRemaining))) {
+      const anyNearby = nearbyLevels.update(nearby ? d.batteries : null, { left: '', right: '' }, null,
+        (broadcast || currentDevice.rememberedCase) && !single ? d.id : undefined, broadcast, currentDevice.rememberedCase, caseBuds);
       setHidden(nearbyLevels.el, !anyNearby);
     } else {
       nearbyLevels.pause();
@@ -520,11 +565,11 @@ export const createHome = (ctx: Ctx): Page => {
     setClass(hero, 'wp-hero--controls', showDevice);
     if (deviceControls.inert === showDevice) deviceControls.inert = !showDevice;
 
-    const showWakeHint = offline && d.hasKeys;
+    const showWakeHint = conn === 'notConnected' && d.hasKeys;
     setClass(keysHint, 'wp-hero__hint--wake', showWakeHint);
     setText(hintText, t(store.desktopOnly ? 'setup.desktopOnly'
       : showWakeHint ? d.art === 'max' ? 'home.hintMax' : 'home.hintBuds' : 'home.keysHint'));
-    setHidden(keysHint, !store.desktopOnly && !showWakeHint && (d.hasKeys || connected));
+    setHidden(keysHint, !store.desktopOnly && (failed || (!showWakeHint && (d.hasKeys || connected))));
 
     setClass(hero, 'wp-hero--lift-playing', lifting);
     const act =
@@ -535,8 +580,10 @@ export const createHome = (ctx: Ctx): Page => {
           ? (['home.cancel', 'secondary'] as const)
           : conn === 'reconnecting'
             ? null
-            : conn === 'attachFailed'
-              ? (['home.reconnect', 'primary'] as const)
+            : failed
+              ? ([isPairside ? 'home.retryControls' : 'home.reconnect', 'primary'] as const)
+              : conn === 'available'
+                ? (['home.openPairControls', 'primary'] as const)
               : (['home.connect', 'primary'] as const);
     setHidden(actions, !act || (connected && !showDevice && !carryCancel && fullWindow));
     if (lifting && actions.contains(document.activeElement)) menu.title.focus({ preventScroll: true });
@@ -545,6 +592,12 @@ export const createHome = (ctx: Ctx): Page => {
       setAttr(action, 'class', `wp-btn wp-btn--${act[1]}`);
       setText(action, t(act[0]));
     }
+    if (!showRecovery && !recovery.hidden) {
+      if (recovery.contains(document.activeElement)) (actions.hidden || lifting ? menu.title : action).focus({ preventScroll: true });
+      diagnostics.leave();
+    }
+    setHidden(recovery, !showRecovery);
+    if (showRecovery) diagnostics.syncDevice();
     outputDevice = showDevice && ready ? d.id : null;
     renderOutput();
     const nextPlayerDevice = fullWindow ? outputDevice : null;
@@ -614,6 +667,7 @@ export const createHome = (ctx: Ctx): Page => {
       activity.close();
       batteries.pause();
       nearbyLevels.pause();
+      clearTimeout(caseReadingExpiry);
       cancelDevice = null;
       observedDevice = null;
       confirmedConnection = false;
@@ -624,14 +678,23 @@ export const createHome = (ctx: Ctx): Page => {
       connection.reset();
       waitingMotion.reset();
       heroMotion.reset();
+      diagnostics.leave();
     },
-    returnFocus: from => from === 'battery' ? batteries.partElement(batteryTrigger) : null,
+    returnFocus: from => {
+      if (from === 'battery') {
+        const group = nearbyLevels.el.hidden ? batteries : nearbyLevels;
+        const reading = group.partElement(batteryTrigger);
+        return group.el.hidden || reading.hidden ? menu.title : reading;
+      }
+      return from === 'advanced' && !recovery.hidden ? diagnostics.summary : null;
+    },
     sections: {
       hero: renderHero,
       activity: activity.render,
       nowPlaying: renderPlayer,
       mediaTimeline: () => { if (!dashboard.hidden) nowPlaying.renderTimeline(); },
-      outputRoute: renderOutput,
+      outputRoute: () => { renderOutput(); if (diagnostics.el.open) diagnostics.outputChanged(); },
+      connectionCheck: diagnostics.paint,
       update: () => {
         const u = store.update;
         const show = u.available !== null && u.available !== u.dismissed;

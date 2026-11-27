@@ -30,8 +30,17 @@ The packaged Sound check preserved all six tones on separate channels when decod
 
 For a sample of 39 unambiguous listening-mode writes followed by a matching AirPods report, the median was about 0.95 seconds. These are device report timings measured from the existing log. They do not measure when the audio changed inside the earbuds or how soon the app displayed the pending selection.
 
+## Microphone sample and stereo handoff
+
+On November 25, AirPods Pro 3 lost audible playback in one ear after Parity stopped the microphone recording. In the monitored stops, the AirPods reported mic-off within 250–380 ms of the STOP command. Windows loopback measured both channels at similar levels across the next two seconds. The Bluetooth service recorded no Hands-Free or controller reconnection at that time. Loopback measures the Windows mix before the endpoint's hardware output. [Microsoft on loopback recording](https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording)
+
+With **Low mic latency** on, Windows still closed the recording stream when Stop was pressed. Parity left the AirPods microphone stream active, and both ears kept playing in the live test. This identifies the microphone shutdown transition as a suspect and gives users an opt-in workaround. Confirming the underlying fault requires observing the output as the earbuds leave microphone mode.
+
+Separately, starting a new recording during replay could leave a disposed token attached to the microphone page. A regression test now verifies that canceling the old replay releases ownership and that its eventual completion cannot interrupt the new sample.
+
 ## Verification
 
+- For saved sound settings, select an app in **Sound → Spatial Audio → Audio routing** and turn on **Remember sound settings**. Choose a Spatial Audio mode and adjust **Settings → Advanced settings → Windows audio → PC Equalizer**. Switch to another app while audio is playing and confirm the old app returns to its previous Windows output. Switch back and verify the saved curve and route, including after a call and on a second AirPods pair. After restart, use **Apply saved settings** in Audio routing to reapply the current source’s setup.
 - Run `python tools/tests/run-regressions.py` for head pose and rendering, case signals, role restoration, UI behavior and shared-feature regressions.
 - Run the Windows spatial mix test with `--virtual-loopback` for a short, quiet test solely on the existing AudioRelay virtual endpoint. It checks that Windows delivers an independent loopback signal and verifies all default output roles after the test.
 - An isolated probe set both per-app playback roles on its own executable, exited without restoring them, then relaunched. The replacement process found the saved journal and restored both roles. The Windows playback defaults stayed in place.

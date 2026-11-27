@@ -17,6 +17,7 @@
 @import './controls-refresh.css';
 @import './hotkeys-refresh.css';
 @import './sound-refresh.css';
+@import './pc-equalizer.css';
 @import './settings-refresh.css';
 
 @import './spatial-room.css';
@@ -26,3 +27,4 @@
 @import './apple-hearing-history.css';
 @import './battery-history.css';
 @import './pickers.css';
+@import './owner-preview.css';

@@ -1,10 +1,11 @@
 import { createLayoutPreferences } from '../components/layoutPreferences';
 import { createSwitchRow } from '../components/switchRow';
-import { setChecked } from '../dom';
+import { setChecked, setHidden } from '../dom';
+import { headphoneFinishes } from '../hardwareArt';
 import { post } from '../host';
 import type { LabelKey } from '../i18n';
 import type { Theme } from '../protocol';
-import { store } from '../state';
+import { current, store } from '../state';
 import { getTheme, getUseAccent, setThemePrefs } from '../theme';
 import type { Ctx, Page } from './page';
 
@@ -74,6 +75,9 @@ const createThemePicker = (onChange: () => void) => {
 };
 
 export function createAppearance(ctx: Ctx): Page {
+  let headphoneGroup!: HTMLElement;
+  let finishPicker!: HTMLSelectElement;
+  let finishModel: string | undefined;
   const layout = createLayoutPreferences(ctx);
   const theme = createThemePicker(() => ctx.update('windows'));
   const accent = createSwitchRow({
@@ -105,15 +109,44 @@ export function createAppearance(ctx: Ctx): Page {
         <h2 class="wp-group__title" l:text="appearance.window" />
         <div class="wp-list">{motion.row}{layout.order}{layout.size}</div>
       </section>
+      <section class="wp-group" ref={headphoneGroup} hidden>
+        <h2 class="wp-group__title">AirPods Max</h2>
+        <div class="wp-list">
+          <label class="wp-row">
+            <span class="wp-row__text"><span class="wp-row__title" id="headphoneFinishTitle" l:text="appearance.maxFinish" /></span>
+            <select class="wp-choice" aria-labelledby="headphoneFinishTitle" ref={finishPicker} onchange={() => {
+              const device = current();
+              if (device && device.model === finishModel) post({ type: 'setMaxFinish', id: device.id, value: finishPicker.value });
+            }}>
+              <option value="" l:text="appearance.defaultFinish" />
+            </select>
+          </label>
+        </div>
+      </section>
     </div>
   ) as HTMLDivElement;
   return {
-    el, anchors: { order: layout.order, motion: motion.row, size: layout.size },
+    el, anchors: { order: layout.order, motion: motion.row, size: layout.size, finish: finishPicker },
     sections: { windows: () => {
       theme.set(getTheme());
       setChecked(accent.input, getUseAccent());
       setChecked(motion.input, store.reduceMotion);
       layout.render();
-    } },
+      renderFinish();
+    }, hero: renderFinish },
   };
+  function renderFinish() {
+    const device = current();
+    const model = device?.model;
+    const finishes = headphoneFinishes(model);
+    setHidden(headphoneGroup, finishes.length === 0);
+    if (!device || finishes.length === 0) return;
+    if (model !== finishModel) {
+      finishModel = model;
+      finishPicker.length = 1;
+      for (const finish of finishes) finishPicker.add(new Option(finish.label, finish.id));
+    }
+    const value = store.maxFinishes[device.id];
+    finishPicker.value = finishes.some(finish => finish.id === value) ? value : '';
+  }
 }

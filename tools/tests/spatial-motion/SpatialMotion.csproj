@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../src/WPods/Core/HeadMotion.cs" Link="HeadMotion.cs" />
+    <Compile Include="../../../src/WPods/Core/HeadTrackingRetry.cs" Link="HeadTrackingRetry.cs" />
     <Compile Include="../../../src/WPods/Audio/SpatialStereo.cs" />
     <Compile Include="../../../src/WPods/Audio/StereoLevelMatch.cs" />
     <EmbeddedResource Include="../../../src/WPods/Audio/kemar48.bin" LogicalName="Pairside.Kemar48" />

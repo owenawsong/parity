@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace WPods.Core;
 
@@ -41,6 +42,7 @@ internal static class Aap
     public const int MediaAssistLength = 140;
     public const int MediaAssistCallsOffset = 10;
     public const int MediaAssistMediaOffset = 11;
+    internal const byte CustomEqOpcode = 0x63;
 
     public const byte HeartRateService = 0x54;
     public const byte HeartRateLegacyService = 0x13;
@@ -150,7 +152,7 @@ internal static class Aap
                 if (state.SleepState == p[9]) return DeviceChange.None;
                 state.SleepState = p[9];
                 return DeviceChange.Sleep | state.Observe(DeviceCapabilities.SleepDetection);
-            case 0x63 when TryReadCustomEq(p) is { } eq:
+            case CustomEqOpcode when TryReadCustomEq(p) is { } eq:
                 if (state.CustomEq == eq) return DeviceChange.None;
                 state.CustomEq = eq;
                 return DeviceChange.Settings;
@@ -162,12 +164,12 @@ internal static class Aap
     // Custom EQ is the three-band record, separate from the 0x53 Hearing Assistance EQ.
     internal static OnboardEq? TryReadCustomEq(ReadOnlySpan<byte> p) =>
         p.Length == 13 && BinaryPrimitives.ReadUInt32LittleEndian(p) == Header &&
-        p[4] == 0x63 && p[5] == 0 && p[6] == 5 && p[7] == 0 && p[8] == 1 &&
+        p[4] == CustomEqOpcode && p[5] == 0 && p[6] == 5 && p[7] == 0 && p[8] == 1 &&
         p[9] is 1 or 2 && p[10] <= 100 && p[11] <= 100 && p[12] <= 100
             ? new OnboardEq(p[9] == 2, p[10], p[11], p[12]) : null;
 
     internal static byte[] CustomEqPacket(OnboardEq eq) =>
-        [0x04, 0, 0x04, 0, 0x63, 0, 0x05, 0, 0x01, eq.Enabled ? (byte)2 : (byte)1, eq.Low, eq.Mid, eq.High];
+        [0x04, 0, 0x04, 0, CustomEqOpcode, 0, 0x05, 0, 0x01, eq.Enabled ? (byte)2 : (byte)1, eq.Low, eq.Mid, eq.High];
 
     /// <summary>Parses the 0x31 reply: count, then {type u16, length u16, key} entries.</summary>
     public static bool TryParseKeys(ReadOnlySpan<byte> p, out ProximityKeys? keys)
@@ -330,29 +332,43 @@ internal static class Aap
 
     private static DeviceChange ApplyDeviceInfo(ReadOnlySpan<byte> p, DeviceState state)
     {
-        // Strings start at offset 11 (bytes 6..10 undecoded): name, model number, manufacturer, serial, ...
+        // Strings start at offset 11. The first build follows the
+        // manufacturer and serial. Only the model and build are exposed.
         ReadOnlySpan<byte> rest = p[11..];
         string name = NextString(ref rest);
         string modelNumber = NextString(ref rest);
-        if (name == state.Name && modelNumber == state.ModelNumber)
+        _ = TakeInfoString(ref rest); // manufacturer
+        _ = TakeInfoString(ref rest); // serial
+        string? build = rest.IndexOf((byte)0) is > 0 and <= 32 ? NextString(ref rest) : null;
+        if (build is null || !FirmwareBuildFormat.IsMatch(build))
+            build = modelNumber == state.ModelNumber ? state.FirmwareBuild : null;
+        if (name == state.Name && modelNumber == state.ModelNumber && build == state.FirmwareBuild)
         {
             return DeviceChange.None;
         }
         state.Name = name;
         state.ModelNumber = modelNumber;
+        state.FirmwareBuild = build;
         AirPodsModel model = Models.FromModelNumber(modelNumber) ?? Models.Unknown;
         state.ModelName = model.Name;
         return DeviceChange.Identity | state.SetBaseline(model.Capabilities);
     }
 
-    private static string NextString(ref ReadOnlySpan<byte> rest)
+    private static readonly Regex FirmwareBuildFormat = new(
+        @"\A(?:[0-9]+(?:\.[0-9]+){1,3}|[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?)\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+    private static string NextString(ref ReadOnlySpan<byte> rest) =>
+        Encoding.UTF8.GetString(TakeInfoString(ref rest)).Trim();
+
+    private static ReadOnlySpan<byte> TakeInfoString(ref ReadOnlySpan<byte> rest)
     {
         int end = rest.IndexOf((byte)0);
         if (end < 0)
         {
             end = rest.Length;
         }
-        string value = Encoding.UTF8.GetString(rest[..end]).Trim();
+        ReadOnlySpan<byte> value = rest[..end];
         rest = end < rest.Length ? rest[(end + 1)..] : default;
         return value;
     }

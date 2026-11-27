@@ -35,12 +35,30 @@ internal sealed partial class TrayApp
                 && address == _batteryWatch && (part == _batteryPart ||
                     ((part is "left" or "right") && (_batteryPart is "left" or "right")))) visibleChange = true;
         }
-        if (_session is { } session)
+        var session = _session;
+        if (session is not null)
+        {
+            var docked = _nearby.GetCaseBudBroadcast(session.Address);
             for (int i = 0; i < BatteryTimeline.Parts.Length; ++i)
-                if (session.State.BatteryReportAt(i) is { } sample)
-                    Record(session.Address, BatteryTimeline.Parts[i], sample.Value, sample.At, "device");
+            {
+                string part = BatteryTimeline.Parts[i];
+                var sample = session.State.BatteryReportAt(i);
+                Battery? caseBattery = part switch { "left" => docked?.Left, "right" => docked?.Right, _ => null };
+                // A still-cached case observation cannot displace a newer report from the earbud.
+                if (docked is { } buds && caseBattery is { Percent: not null } value &&
+                    buds.SeenAt <= now && buds.SeenAt > (sample?.At ?? 0))
+                    Record(session.Address, part, value, buds.SeenAt, "case");
+                else if (sample is not null)
+                    Record(session.Address, part, sample.Value, sample.At, "device");
+            }
+        }
         foreach (var device in _devices)
         {
+            if (session?.Address != device.Address && _nearby.GetCaseBudBroadcast(device.Address) is { } buds)
+            {
+                Record(device.Address, "left", buds.Left, buds.SeenAt, "case");
+                Record(device.Address, "right", buds.Right, buds.SeenAt, "case");
+            }
             if (_nearby.GetCaseBroadcast(device.Address) is { } observed)
                 Record(device.Address, "case", observed.Battery, observed.SeenAt, observed.Direct ? "case" : "nearby");
             else if (_caseHistory?.Get(device.Address) is { } cached &&
@@ -102,6 +120,13 @@ internal sealed partial class TrayApp
         {
             current = pct;
             newest = seen.SeenAt;
+        }
+        if (part is "left" or "right" && _nearby.GetCaseBudBroadcast(address) is { } buds &&
+            buds.SeenAt <= now && now - buds.SeenAt <= 90_000 && buds.SeenAt >= newest &&
+            (part == "left" ? buds.Left : buds.Right).Percent is { } dockedPercent)
+        {
+            current = dockedPercent;
+            newest = buds.SeenAt;
         }
         if (_session?.Address == address &&
             _session.State.BatteryReportAt(Array.IndexOf(BatteryTimeline.Parts, part)) is { } sessionReport &&

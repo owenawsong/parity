@@ -10,9 +10,12 @@
     <Compile Include="../../../src/BluetoothServiceIdentity.cs" />
     <Compile Include="../../../src/WPods/Audio/EarPlaybackRoutes.cs" />
     <Compile Include="../../../src/WPods/Audio/SpotifyBridge.cs" />
+    <Compile Include="../../../src/WPods/Audio/PcEqualizer.cs" />
+    <Compile Include="../../../src/WPods/Audio/Dsp/Biquad.cs" />
     <Compile Include="../../../src/WPods/Audio/SpotifyRouting.cs" />
     <Compile Include="../../../src/WPods/Audio/SpatialApp.cs" />
     <Compile Include="../../../src/WPods/Audio/WindowsSpatialMix.cs" />
+    <Compile Include="../../../src/WPods/Audio/SpatialVolumeLink.cs" />
     <Compile Include="../../../src/WPods/Audio/SpatialStereo.cs" />
     <Compile Include="../../../src/WPods/Audio/SpatialPlaybackBuffer.cs" />
     <Compile Include="../../../src/WPods/Audio/StereoLevelMatch.cs" />

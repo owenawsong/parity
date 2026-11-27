@@ -1,0 +1,57 @@
+@media (min-width: 460px) {
+  .wp-destination[data-destination='ownerPreview'] { margin-block-start: auto; }
+  .wp-destination[data-destination='ownerPreview'] + .wp-destination[data-destination='windows'] { margin-block-start: 0; }
+}
+.wp-owner-preview { display: grid; align-content: start; grid-auto-rows: max-content; gap: 16px; }
+.wp-owner-description { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.wp-owner-tools, .wp-owner-overview, .wp-owner-popup {
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--surface-card);
+}
+.wp-owner-tools { display: grid; gap: 14px; padding: 16px; }
+.wp-owner-tools > button { justify-self: start; }
+.wp-owner-pickers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); gap: 12px; }
+.wp-owner-pickers label { display: grid; gap: 5px; min-width: 0; }
+.wp-owner-sliders { display: grid; gap: 4px; }
+.wp-owner-slider {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr) 3.5rem;
+  gap: 10px;
+  align-items: center;
+}
+.wp-owner-percent { font-variant-numeric: tabular-nums; text-align: end; color: var(--text-secondary); }
+.wp-owner-toggles { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.wp-owner-overview { position: relative; padding: 16px; }
+.wp-owner-overview h2 { margin: 0 0 15px; }
+.wp-owner-stage { position: relative; }
+.wp-owner-motion-actions { display: flex; justify-content: center; margin-block-start: 12px; }
+.wp-owner-popup { position: relative; width: min(100%, 322px); margin-inline: auto; align-self: start; }
+.wp-acoustic-preview {
+  border: 1px solid var(--separator);
+  border-radius: 13px;
+  background: var(--surface-card);
+  overflow: clip;
+}
+.wp-acoustic-preview > summary { min-height: 46px; padding-inline: 14px; }
+.wp-acoustic-body { display: grid; gap: 13px; padding: 14px; }
+.wp-acoustic-mode, .wp-acoustic-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.wp-acoustic-mode [aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--focus-ring); }
+.wp-acoustic-source { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.wp-acoustic-channels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.wp-acoustic-channel { min-width: 0; display: grid; gap: 5px; color: var(--text-secondary); }
+.wp-acoustic-channel strong { font-size: clamp(16px, 4vw, 23px); font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.wp-acoustic-track { height: 4px; overflow: hidden; border-radius: 4px; background: var(--separator); }
+.wp-acoustic-track > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--accent-text);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.wp-acoustic-demo, .wp-acoustic-actions { display: grid; gap: 9px; }
+.wp-acoustic-demo input { margin: 0; width: 100%; accent-color: var(--accent-text); }
+@media (prefers-reduced-motion: no-preference) {
+  .wp-acoustic-track > span { transition: transform 150ms ease-out; }
+}

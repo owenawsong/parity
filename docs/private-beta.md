@@ -1,6 +1,6 @@
 # Parity 0.19 beta checklist
 
-Use the Parity 0.19.1 x64 Setup EXE from the [prerelease](https://github.com/owenawsong/parity/releases/tag/v0.19.1). The desktop app installs for the current user. The optional AirPods controls install Parity’s own Bluetooth service and reuse USB/IP if already installed and verified.
+Use the Parity 0.19.2 x64 Setup EXE from the [prerelease](https://github.com/owenawsong/parity/releases/tag/v0.19.2). The desktop app installs for the current user. The optional AirPods controls install Parity’s own Bluetooth service and reuse USB/IP if already installed and verified.
 
 ## Test setups
 
@@ -29,10 +29,11 @@ Record the AirPods firmware, Bluetooth adapter name and USB hardware ID, Windows
 | Battery and charging | Verify each earbud and the case with the lid open. Close it with both buds out. Report whether there is a fresh broadcast or an aged last reading. Try one earbud in the case and verify the charging indicator. |
 | Listening modes | Cycle the available modes quickly, then leave one selected for a few seconds. Confirm the setting in the earbuds and the UI. Check that the available modes match the model. |
 | Music and calls | Play music, start a call using the selected input, end the call, and check stereo playback afterward. If there is an issue, report the player's output, the call app's input, and how the route recovered. |
+| Microphone replay | With music playing, record a short AirPods sample. Check both earbuds during recording, after stopping, and during replay. If one ear goes quiet, note which ear, whether it recovers, and which sample output was selected. |
 | Device settings | Try an ear detection setting, stem action, or microphone side setting that the model exposes. Check the choice again after reconnecting. |
 
 Share results in a [compatibility report](https://github.com/owenawsong/parity/issues/new?template=adapter_report.yml). When a failure needs logs, attach a short excerpt with device addresses and personal names removed. Setup writes its app-install log under `%LOCALAPPDATA%\Pairside\setup.log`.
 
 ## Development verification
 
-The package smoke test stages both payloads, verifies the desktop files and the bundled driver, and exercises desktop file removal. The administrator-approved Bluetooth changes and radio restoration need the physical Windows tests above.
+The package smoke tests stage both payloads, verify the desktop files and bundled driver, exercise desktop file removal, and test the extracted UI with simulated devices. The administrator-approved Bluetooth changes, real pairing, sleep/wake, and radio restoration need the physical Windows tests above. [Development verification](development.md)

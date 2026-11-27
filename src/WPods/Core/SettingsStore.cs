@@ -62,11 +62,14 @@ public sealed record UiPrefs
     public double WindowWidth { get; init; } = AppIdentity.IsPairside ? 529 : 640;
     public string[] SidebarOrder { get; init; } = [];
     public string[] AutoConnectDevices { get; init; } = [];
+    public Dictionary<string, string> MaxFinishes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public string NodAction { get; init; } = "playPause";
     public string ShakeAction { get; init; } = "none";
     public string SpatialPlayer { get; init; } = "windowsMix";
     public int SpatialSpeakerAngle { get; init; } = 30;
     public string SpatialLevel { get; init; } = "boost";
+    public Dictionary<string, PcEqProfile>? PcEqualizers { get; init; }
+    public Dictionary<string, AppSoundProfile>? AppSoundProfiles { get; init; }
     public int PulseWindowSeconds { get; init; } = 60;
     public bool PulseSessionScale { get; init; }
     public string? PulseFeedToken { get; init; }
@@ -83,6 +86,11 @@ public sealed record UiPrefs
     /// <summary>The Mixer page hides endpoints disabled in Windows (picked ones always show).</summary>
     public bool MixerHideDisabled { get; init; }
 }
+
+public sealed record PcEqProfile(int[] Bands, Dictionary<string, int[]> Presets);
+
+public sealed record AppSoundProfile(string Mode, bool Equalizer, int[] Bands, string? ProcessName, string? Identity,
+    int? SpeakerAngle = null, string? PlaybackLevel = null);
 
 /// <summary>
 /// App-wide Mixer settings (settings.json "mixer"): the picked Windows audio endpoint IDs and each endpoint's volume
@@ -171,7 +179,7 @@ public sealed record MicConfig(IReadOnlySet<MicMode> Modes, IReadOnlyDictionary<
 }
 
 /// <summary>Model reported over AAP 0x1D, remembered for pairs that are not attached.</summary>
-public sealed record DeviceModel(string Number, string Name);
+public sealed record DeviceModel(string Number, string Name, string? FirmwareBuild = null);
 
 /// <summary>
 /// Per-pair and app settings in %LOCALAPPDATA%\WPods\settings.json, proximity keys DPAPI-protected in keys.bin.
@@ -464,6 +472,8 @@ public sealed class SettingsStore
             {
                 _capabilities.Remove(address);
                 _podSettings.Remove(address);
+                if (_models.TryGetValue(address, out var model))
+                    _models[address] = model with { FirmwareBuild = null };
             }
             SaveSettings();
             Log.Info("settings", repaired
@@ -558,7 +568,14 @@ public sealed class SettingsStore
             }
             // A JSON null bypasses the nullable annotations: every collection, entry and UI string is checked here.
             UiPrefs ui = file.Ui ?? UiPrefs.Default;
-            _ui = ui with { SidebarOrder = ui.SidebarOrder ?? [], AutoConnectDevices = ui.AutoConnectDevices ?? [], Theme = ui.Theme ?? UiPrefs.Default.Theme, Language = ui.Language ?? UiPrefs.Default.Language };
+            _ui = ui with
+            {
+                SidebarOrder = ui.SidebarOrder ?? [],
+                AutoConnectDevices = ui.AutoConnectDevices ?? [],
+                MaxFinishes = ui.MaxFinishes ?? new(StringComparer.OrdinalIgnoreCase),
+                Theme = ui.Theme ?? UiPrefs.Default.Theme,
+                Language = ui.Language ?? UiPrefs.Default.Language,
+            };
             if (!UiPrefs.IsGestureAction(_ui.NodAction)) _ui = _ui with { NodAction = UiPrefs.Default.NodAction };
             if (!UiPrefs.IsGestureAction(_ui.ShakeAction)) _ui = _ui with { ShakeAction = UiPrefs.Default.ShakeAction };
             if (!UiPrefs.IsGestureSensitivity(_ui.GestureSensitivity)) _ui = _ui with { GestureSensitivity = UiPrefs.Default.GestureSensitivity };

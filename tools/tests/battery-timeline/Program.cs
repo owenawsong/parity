@@ -44,9 +44,27 @@ try
     Check(!restarted.Observe(pair,"case",80,start,false,"saved",later+8), "backfill after history opt-out");
     restarted.Observe(pair,"case",80,later+9,null,"saved",later+9);
     Check(restarted.Read(pair,"case",later+10).Single().Source == "saved", "saved reading provenance");
+    restarted.SetAlert(pair,"right",80,later+10,79);
+    Check(restarted.CrossedTarget(pair,"right",80,later+11,later+11), "docked bud report should trigger its charge alert");
+    restarted.Observe(pair,"right",80,later+11,true,"case",later+11);
+    Check(!restarted.CrossedTarget(pair,"right",80,later+11,later+12), "duplicate docked bud alert");
+    restarted.Save(later+11);
+    var docked = new BatteryTimeline(file);
+    docked.Load(later+11);
+    Check(docked.Read(pair,"right",later+11).Single() is { Pct:80, Charging:true, Source:"case" }, "lost case provenance for an earbud on restart");
+    Check(docked.Read(other,"right",later+11).Count==0, "case report leaked into another pair");
+    docked.SetAlert(pair,"left",80,later+12,null);
+    Check(!docked.CrossedTarget(pair,"left",95,later+14,later+14), "a newly armed alert immediately used an above-target report");
+    docked.Save(later+14);
+    var competingSources = new BatteryTimeline(file);
+    competingSources.Load(later+15);
+    Check(!competingSources.CrossedTarget(pair,"left",79,later+13,later+15), "older report should not qualify an alert");
+    Check(!competingSources.CrossedTarget(pair,"left",96,later+15,later+15), "older case report qualified an alert after a newer earbud reading");
+    Check(!competingSources.CrossedTarget(pair,"left",76,later+16,later+16), "below-target report should qualify without notifying");
+    Check(competingSources.CrossedTarget(pair,"left",80,later+17,later+17), "a subsequent in-order crossing should notify");
     restarted.Save(later + BatteryTimeline.Day + 10);
     Check(restarted.Read(pair,"case",later + BatteryTimeline.Day + 10).Count==0, "24-hour expiry");
-    Console.WriteLine("PASS buckets, gaps, source, retention, pair isolation, opt-out, restoration, one-time alerts and stale reports.");
+    Console.WriteLine("PASS battery history buckets, provenance, retention, pair isolation, opt-out, restoration and one-time alerts, including docked earbuds.");
 }
 finally { File.Delete(file); File.Delete(file+".tmp"); }
 

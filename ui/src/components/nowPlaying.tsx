@@ -42,9 +42,11 @@ export const createNowPlaying = () => {
           {image}
         </div>
         <div class="wp-now-playing__track" aria-live="polite" aria-atomic="true">
-          <span class="wp-now-playing__source" ref={source} />
           <strong ref={title} />
-          <span class="wp-now-playing__artist" ref={artist} />
+          <div class="wp-now-playing__meta">
+            <span class="wp-now-playing__artist" ref={artist} />
+            <span class="wp-now-playing__source" ref={source} />
+          </div>
         </div>
         <div class="wp-now-playing__transport" ref={actions}>
           <button type="button" l:aria-label="media.previous" ref={previous}

@@ -26,7 +26,7 @@ internal sealed partial class TrayApp
     // Link-up and attach waits of user connects, completed from core threads.
     private readonly Lock _linkLock = new();
     private readonly Dictionary<ulong, TaskCompletionSource> _linkWaits = [];
-    private readonly Dictionary<ulong, TaskCompletionSource> _attachWaits = [];
+    private readonly Dictionary<ulong, TaskCompletionSource> _readyWaits = [];
     // Last micStage message per slot, replayed when the hidden main page shows again.
     private readonly string?[] _micStages = new string?[2];
 
@@ -39,7 +39,7 @@ internal sealed partial class TrayApp
             return;
         }
         // Volume drags and compact layout transitions may send per-frame updates.
-        if (m.Type is not ("previewMixerVolume" or "previewOnboardEq" or "fitCompactHeight"))
+        if (m.Type is not ("previewMixerVolume" or "previewOnboardEq" or "previewPcEq" or "fitCompactHeight"))
         {
             Log.Info("ui", "main command " + Describe(m));
         }
@@ -48,7 +48,7 @@ internal sealed partial class TrayApp
         {
 #if PAIRSIDE_LIVE
             case "readConnectionCheck" when m.Request > 0:
-                ReadConnectionCheck(m.Request);
+                ReadConnectionCheck(m.Request, id);
                 break;
             case "setAutomaticPulse" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
                 SetAutomaticPulse(id, m.Value.GetBoolean());
@@ -117,26 +117,44 @@ internal sealed partial class TrayApp
                 RequestWindowsSpatial(id, m.Request, m.Type == "openWindowsSpatial");
                 break;
             case "watchSpotifyRoom":
-                WatchSpotifyRoom(id);
+                WatchSpotifyRoom(id, m.Value.ValueKind == JsonValueKind.True);
                 break;
             case "testSpatialSpeakers" when id != 0 && _spotifySession?.Address == id && _spotifyRoomViewer == id:
                 _spotify?.TestSpeakers();
                 break;
-            case "setSpatialPlayer" when SpatialApp.FromKey(m.Name) is { } player:
-                SetSpatialPlayer(player);
+            case "setSpatialPlayer" when ResolveSoundSource(id, m.Name) is { } player:
+                SetSpatialPlayer(player, id);
+                break;
+            case "rememberAppSound" when id != 0 && m.Name is { } source &&
+                m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                SetRememberAppSound(id, source, m.Value.GetBoolean());
+                break;
+            case "recallAppSound" when id != 0 && m.Name == _spatialPlayer.Key && AppSoundFor(id, _spatialPlayer.Key) != null:
+                SetSpatialPlayer(_spatialPlayer, id, recall: true);
                 break;
             case "setSpeakerAngle" when m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetInt32(out int angle) && angle is 20 or 30 or 55:
-                SavePrefs(_prefs with { SpatialSpeakerAngle = angle });
-                _spotify?.SetSpeakerAngle(angle);
-                SendSpotify();
+                SetSpatialRenderPrefs(angle: angle);
                 break;
             case "setSpatialLevel" when m.Name is "soft" or "matched" or "boost":
-                SavePrefs(_prefs with { SpatialLevel = m.Name });
-                _spotify?.SetLevel(m.Name);
-                SendSpotify();
+                SetSpatialRenderPrefs(level: m.Name);
                 break;
             case "spotifySpatialMode" when m.Name is "stereo" or "fixed" or "tracked":
-                SetSpotifyMode(id, m.Name);
+                SetSpotifyMode(id, m.Name, remember: true);
+                break;
+            case "readPcEq" when id != 0:
+                SendPcEq(id);
+                break;
+            case "setPcEqEnabled" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                SetPcEqEnabled(id, m.Value.GetBoolean());
+                break;
+            case "returnToDirectPlayback" when id != 0:
+                ReturnToDirectPlayback(id);
+                break;
+            case "comparePcEq" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                ComparePcEq(id, m.Value.GetBoolean());
+                break;
+            case "previewPcEq" or "savePcEq" or "savePcEqPreset" when id != 0 && ReadPcEqCurve(m.Value) is { } curve:
+                EditPcEq(id, curve, m.Type, m.Name, m.Request, m.Code);
                 break;
             case "spotifySpatialCenter" when id != 0 && _spotifySession?.Address == id && SpotifyOwnsMotion && _spotifyHasPose:
                 _headMotionTest?.RecenterAudio();
@@ -170,11 +188,18 @@ internal sealed partial class TrayApp
                 StartHeadMotion(id, m.Name == "playback");
                 break;
             case "stopHeadMotion" when _headMotionTest is { SpatialRequest: 0 }:
-                StopHeadMotion();
+                StopGesturePractice();
                 break;
-            case "setOnboardEq" or "previewOnboardEq" when id != 0 && TryReadEqRequest(m.Value) is { } eq:
-                QueueOnboardEq(new OnboardEqRequest(pane, id, m.Request, eq, m.Type == "setOnboardEq"));
+            case "setOnboardEq" or "previewOnboardEq" when id != 0 && m.Request > 0 && TryReadEqRequest(m.Value) is { } eq:
+            {
+                bool commit = m.Type == "setOnboardEq";
+                if (_connections.Session is { } session && session.Address == id && session.ConnectionId == m.ConnectionId &&
+                    (commit || MainLive && main.WindowState != FormWindowState.Minimized))
+                    QueueOnboardEq(new OnboardEqRequest(pane, session, m.Request, eq, commit));
+                else if (commit)
+                    SendOnboardEqResult(pane, id, m.Request, sent: false);
                 break;
+            }
             case "watchCaseFinder":
                 _caseFinderDevice = id;
                 UpdateCaseFinderWatch();
@@ -187,6 +212,14 @@ internal sealed partial class TrayApp
             case "watchHeadphoneLevel" when id != 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
                 WatchHeadphoneLevel(pane, id, m.Request, m.Value.GetBoolean());
                 break;
+#if PARITY_OWNER_PREVIEW
+            case "watchAcousticLevel" when id != 0 && m.Request > 0 && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                WatchHeadphoneLevel(pane, id, m.Request, m.Value.GetBoolean(), acoustic: true);
+                break;
+            case "importAcousticCalibration":
+                ImportAcousticCalibration(pane);
+                break;
+#endif
             case "recordMicCheck":
                 RecordMicCheck(pane, m.Id, m.Name, m.Request);
                 break;
@@ -203,6 +236,10 @@ internal sealed partial class TrayApp
             case "cancelMicCheck":
                 if (_micSetupWatch is { } cancellingWatch && cancellingWatch.CheckRequest == m.Request)
                     cancellingWatch.StopCheck("idle");
+                break;
+            case "setMicSamplePlayback" when m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetInt32(out int playbackRevision) &&
+                m.PositionMs is >= 0 and <= MicCheck.DurationMs && m.Name is "play" or "pause":
+                SetMicSamplePlayback(pane, m.Request, playbackRevision, (int)m.PositionMs.Value, m.Name == "play", m.Id);
                 break;
             case "startListenMonitor" when m.Id is not null && m.Value.ValueKind == JsonValueKind.Number &&
                 m.Value.TryGetInt32(out int monitorLevel):
@@ -370,6 +407,20 @@ internal sealed partial class TrayApp
                 SavePrefs(_prefs with { SidebarOrder = pages });
                 SendLayoutPrefs();
                 break;
+            case "setMaxFinish" when AppIdentity.IsPairside && id != 0 &&
+                m.Value.ValueKind == JsonValueKind.String && IsMax(id):
+            {
+                string? finish = m.Value.GetString();
+                if (finish is not ("" or "silver" or "space-gray" or "sky-blue" or "green" or "pink" or
+                    "starlight" or "midnight" or "blue" or "purple" or "orange")) break;
+                var finishes = new Dictionary<string, string>(_prefs.MaxFinishes, StringComparer.OrdinalIgnoreCase);
+                if (finish.Length == 0) finishes.Remove(Mac.Format(id));
+                else finishes[Mac.Format(id)] = finish;
+                SavePrefs(_prefs with { MaxFinishes = finishes });
+                SendLayoutPrefs();
+                SendPrefsToPopup();
+                break;
+            }
             case "setPopupSeparateBatteries" when AppIdentity.IsPairside && m.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
                 SavePrefs(_prefs with { PopupSeparateBatteries = m.Value.GetBoolean() });
                 SendLayoutPrefs();
@@ -583,7 +634,7 @@ internal sealed partial class TrayApp
             {
                 Log.Info("ui", $"connect {Mac.Format(address)}: through the nearby offer ({offer.State})");
                 await _nearby.ConnectAsync(address);
-                failure = _connections.Session?.Address == address ? null : "connectFailed";
+                failure = ReadyForControls(address) ? null : "connectFailed";
             }
             else if (Find(address) is not { LinkUp: true } && Native.GetInterfaces(Native.RadioInterface).Count == 0)
             {
@@ -606,19 +657,18 @@ internal sealed partial class TrayApp
     }
 
     /// <summary>
-    /// Brings the link up if needed, then attaches, within <see cref="LinkWait"/>. An attach by the connection
-    /// manager itself also counts; false on timeout, attach failure or Cancel.
+    /// Brings the link up if needed, then waits for usable controls within <see cref="LinkWait"/>.
     /// </summary>
     private async Task<bool> ConnectAudioAsync(ulong address)
     {
         using var cancel = new CancellationTokenSource(LinkWait);
         var link = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var attached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _connectCancels[address] = cancel;
         lock (_linkLock)
         {
             _linkWaits[address] = link;
-            _attachWaits[address] = attached;
+            _readyWaits[address] = ready;
         }
         try
         {
@@ -627,30 +677,21 @@ internal sealed partial class TrayApp
                 Log.Info("ui", $"connect {Mac.Format(address)}: link down, asking Windows to connect audio");
                 int hr = await Task.Run(() => NearbyNative.wpn_bt_connect_audio(address), cancel.Token);
                 Log.Info("ui", $"connect {Mac.Format(address)}: connect audio hr=0x{hr:X8}, waiting for link");
-                await link.Task.WaitAsync(cancel.Token);
+                if (Find(address) is not { LinkUp: true }) await link.Task.WaitAsync(cancel.Token);
                 Log.Info("ui", $"connect {Mac.Format(address)}: link up");
             }
             else
             {
                 Log.Info("ui", $"connect {Mac.Format(address)}: link already up");
             }
-            // Off the UI thread: the attach waits up to 10 s for the service's answer.
-            if (_connections.Session?.Address == address || await Task.Run(() => _connections.ConnectAsync(address, () => !cancel.IsCancellationRequested)))
-            {
-                Log.Info("ui", $"connect {Mac.Format(address)}: attached");
-                return true;
-            }
-            // The connection manager may still be attaching this pair on its own after the link-up event.
-            Log.Info("ui", $"connect {Mac.Format(address)}: ConnectAsync false, waiting for an attach until the 10 s deadline");
-            await attached.Task.WaitAsync(cancel.Token);
-            Log.Info("ui", $"connect {Mac.Format(address)}: attached by the connection manager");
-            return true;
+            if (_connections.Session?.Address != address)
+                await _connections.ConnectAsync(address, null, cancel.Token);
+            if (!ReadyForControls(address)) await ready.Task.WaitAsync(cancel.Token);
+            return ReadyForControls(address);
         }
         catch (OperationCanceledException)
         {
-            bool attachedNow = _connections.Session?.Address == address;
-            Log.Info("ui", $"connect {Mac.Format(address)}: timed out or cancelled, attached={attachedNow}, linkUp={Find(address)?.LinkUp}");
-            return attachedNow;
+            return ReadyForControls(address);
         }
         finally
         {
@@ -658,10 +699,13 @@ internal sealed partial class TrayApp
             lock (_linkLock)
             {
                 _linkWaits.Remove(address);
-                _attachWaits.Remove(address);
+                _readyWaits.Remove(address);
             }
         }
     }
+
+    private bool ReadyForControls(ulong address) =>
+        _connections.Session is { State.Status: SessionStatus.Ready } session && session.Address == address;
 
     private void Cancel(ulong address)
     {
@@ -785,7 +829,7 @@ internal sealed partial class TrayApp
         Log.Warn("ui", $"device command not applied (session={(session is null ? "none" : Mac.Format(session.Address))})");
         if (_connections.Session is { } current && MainLive)
         {
-            SendStateDeltas(field, current.State, force: true);
+            SendStateDeltas(field, current, force: true);
         }
         if (toast && session is not null && _connections.Session == session)
         {
@@ -924,7 +968,7 @@ internal sealed partial class TrayApp
         {
             if (_connections.ShownSession is { } current && current.Address == request.Address && MainLive)
             {
-                SendStateDeltas(Dirty.Settings, current.State, force: true);
+                SendStateDeltas(Dirty.Settings, current, force: true);
             }
             var w = _writer.Begin("adaptiveStrengthResult");
             w.WriteString("id", Mac.Format(request.Address));
@@ -1020,61 +1064,72 @@ internal sealed partial class TrayApp
         }
     }
 
-    private sealed record OnboardEqRequest(WebPane Pane, ulong Address, int Request, OnboardEq Eq, bool Commit);
+    private sealed record OnboardEqRequest(WebPane Pane, AapSession Session, int Request, OnboardEq Eq, bool Commit);
     private OnboardEqRequest? _pendingOnboardEq;
-    private bool _applyingOnboardEq;
+    private OnboardEqRequest? _activeOnboardEq;
+    private CancellationTokenSource? _waitingOnboardEq;
 
     private async void QueueOnboardEq(OnboardEqRequest request)
     {
+        var latest = _pendingOnboardEq ?? _activeOnboardEq;
+        if (latest is not null && latest.Pane == request.Pane && latest.Session == request.Session &&
+            (latest.Request > request.Request || latest.Request == request.Request && latest.Commit)) return;
+
         _pendingOnboardEq = request;
-        if (_applyingOnboardEq) return;
-        _applyingOnboardEq = true;
+        if (_activeOnboardEq is not null)
+        {
+            _waitingOnboardEq?.Cancel();
+            return;
+        }
+
         try
         {
             while (_pendingOnboardEq is { } next)
             {
                 _pendingOnboardEq = null;
-                await ApplyOnboardEqAsync(next);
+                _activeOnboardEq = next;
+                using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(next.Commit ? 3 : 1));
+                _waitingOnboardEq = wait;
+                await ApplyOnboardEqAsync(next, wait.Token);
+                _waitingOnboardEq = null;
             }
         }
         finally
         {
-            _applyingOnboardEq = false;
+            _waitingOnboardEq = null;
+            _activeOnboardEq = null;
         }
     }
 
-    private async Task ApplyOnboardEqAsync(OnboardEqRequest request)
+    private void DiscardOnboardEqPreviews()
     {
-        var (pane, address, sequence, eq, commit) = request;
-        string status = "failed";
-        if (_main?.Pane == pane && _connections.Session is { } session && session.Address == address)
+        if (_pendingOnboardEq is { Commit: false }) _pendingOnboardEq = null;
+        if (_activeOnboardEq is { Commit: false }) _waitingOnboardEq?.Cancel();
+    }
+
+    private async Task ApplyOnboardEqAsync(OnboardEqRequest request, CancellationToken wait)
+    {
+        var (pane, session, sequence, eq, commit) = request;
+        bool sent = false;
+        if (!_exiting && _main?.Pane == pane && _connections.Session == session)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(commit ? 6 : 1));
             try
             {
-                if (!commit)
-                {
-                    await session.PreviewCustomEqAsync(eq, timeout.Token);
-                    return;
-                }
-                var (sent, confirmed) = await session.SetCustomEqAsync(eq, timeout.Token);
-                status = confirmed ? "confirmed" : sent ? "unconfirmed" : "failed";
-                if (sent && !confirmed && _pendingOnboardEq is null && _headMotionTest is null && await _connections.ReadBackCustomEqAsync(session,
-                        () => _mic.Status == MicStatus.NotActive && !_mic.HandsFreeInUse, timeout.Token) is { } reported)
-                {
-                    status = reported == eq ? "confirmed" : "different";
-                }
+                sent = await session.WriteCustomEqAsync(eq, wait);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (wait.IsCancellationRequested)
             {
-                if (commit) Log.Info("aap", "onboard EQ readback timed out");
+                // A newer edit, a hidden window or a busy pipe won the wait before the write started.
             }
         }
-        if (!commit || _pendingOnboardEq is not null) return;
+        if (commit) SendOnboardEqResult(pane, session.Address, sequence, sent && _connections.Session == session);
+    }
+
+    private void SendOnboardEqResult(WebPane pane, ulong address, int sequence, bool sent)
+    {
+        string status = sent ? "sent" : "failed";
         Log.Info("aap", $"onboard EQ result: {status}");
         if (_main?.Pane != pane || !pane.Ready) return;
-        if (MainLive && _connections.ShownSession is { } current && current.Address == address)
-            SendStateDeltas(Dirty.Settings, current.State, force: true);
         var w = _writer.Begin("onboardEqResult");
         w.WriteString("id", Mac.Format(address));
         w.WriteNumber("request", sequence);

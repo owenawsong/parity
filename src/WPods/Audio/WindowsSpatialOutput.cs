@@ -43,7 +43,8 @@ internal static partial class AudioEndpoints
         return output == null ? null : (output, matches.Single(d => Id(d) == output).Id);
     }
 
-    internal static async Task<PlaybackChange> UsePairPlaybackAsync(ulong address, string originalOutput, CancellationToken ct)
+    internal static async Task<PlaybackChange> UsePairPlaybackAsync(ulong address, string originalOutput,
+        Func<bool> stillSelected, CancellationToken ct)
     {
         var output = await FindPairOutputAsync(address, ct).ConfigureAwait(false);
         if (output is null) return PlaybackChange.Unavailable;
@@ -56,6 +57,7 @@ internal static partial class AudioEndpoints
             PlaybackChange change = ComparePlaybackChoice(originalOutput, output.Value.Endpoint, ReadDefaultRenderId());
             if (change != PlaybackChange.Pending) return change;
             ct.ThrowIfCancellationRequested();
+            if (!stillSelected()) return PlaybackChange.Superseded;
             if (policy.SetDefaultEndpoint(output.Value.Endpoint, EMultimedia) < 0) return PlaybackChange.Unavailable;
             for (int i = 0; i < 8; i++)
             {
@@ -104,12 +106,7 @@ internal static partial class AudioEndpoints
         return new(output.Value.Endpoint, provider);
     }
 
-    private static string? ReadDefaultRenderId()
-    {
-        var enumerator = CreateEnumerator();
-        try { return ReadRoute(enumerator, ERender, EMultimedia)?.Id; }
-        finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(enumerator); }
-    }
+    private static string? ReadDefaultRenderId() => ReadDefaultEndpointId(ERender, EMultimedia);
 
     internal static string SpatialProvider(string? subtype, bool supported)
     {

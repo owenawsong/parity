@@ -4,7 +4,7 @@ import { createFrame, setClass, setHidden } from '../dom';
 const MIN_THUMB = 24;
 const INSET = 2;
 const IDLE_MS = 650;
-const MAX_FADE = 64;
+const MAX_FADE = 42;
 
 export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
   let travel = 0;
@@ -14,16 +14,20 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
   let timer = 0;
   let bottomPadding = 0;
   let fade = 0;
+  let thumbSize = 0;
+  let thumbTop = -1;
   const update = (): void => {
     const view = scroller.clientHeight;
     const total = scroller.scrollHeight;
-    const remaining = total - view - scroller.scrollTop;
+    const scrollTop = Math.max(0, scroller.scrollTop);
+    const remaining = total - view - scrollTop;
     // Bottom padding can still scroll after the last control is fully visible.
     const nextFade = Math.min(MAX_FADE, Math.round(view * 0.16), Math.max(0, Math.floor(remaining - bottomPadding)));
     if (nextFade !== fade) {
       fade = nextFade;
       scroller.style.setProperty('--scroll-fade', fade + 'px');
       setClass(scroller, 'wp-body--more', fade > 0);
+      setClass(el, 'wp-scroll--more', fade > 0);
     }
     setHidden(el, total <= view);
     if (total <= view) {
@@ -31,13 +35,16 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
     }
     const track = Math.max(0, view - INSET * 2);
     const size = Math.min(track, Math.max(MIN_THUMB, track * view / total));
-    travel = view - size - INSET * 2;
-    const top =
-      scroller.offsetTop +
-      INSET +
-      (scroller.scrollTop / (total - view)) * travel;
-    el.style.height = `${size}px`;
-    el.style.transform = `translateY(${top}px)`;
+    travel = Math.max(0, track - size);
+    const top = Math.round(scroller.offsetTop + INSET + scrollTop / (total - view) * travel);
+    if (size !== thumbSize) {
+      thumbSize = size;
+      el.style.height = `${size}px`;
+    }
+    if (top !== thumbTop) {
+      thumbTop = top;
+      el.style.transform = `translateY(${top}px)`;
+    }
   };
   const show = (): void => {
     setClass(el, 'wp-scroll--on', true);
@@ -49,6 +56,7 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
     }, IDLE_MS);
   };
   const endDrag = (): void => {
+    if (!dragging) return;
     dragging = false;
     setClass(el, 'wp-scroll--drag', false);
     show();
@@ -85,6 +93,7 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
   ) as HTMLDivElement;
 
   const frame = createFrame(update);
+  el.addEventListener('lostpointercapture', endDrag);
   scroller.addEventListener(
     'scroll',
     () => {
@@ -93,9 +102,10 @@ export const createOverlayScroll = (scroller: HTMLElement): HTMLElement => {
     },
     { passive: true },
   );
-  const resized = new ResizeObserver(() => {
-    bottomPadding = parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
-    update();
+  const resized = new ResizeObserver(entries => {
+    if (entries.some(entry => entry.target === scroller))
+      bottomPadding = parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+    frame();
   });
   resized.observe(scroller);
   // Pages are swapped in as children, so each one is watched for content growth too.

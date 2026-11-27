@@ -1,5 +1,6 @@
 import { createSegmented } from './segmented';
-import { setAttr, setDisabled, setHidden, setText } from '../dom';
+import { createSwitchRow } from './switchRow';
+import { setAttr, setChecked, setDisabled, setHidden, setText } from '../dom';
 import { post } from '../host';
 import { t } from '../i18n';
 import { Icon } from '../icons';
@@ -22,6 +23,8 @@ const speaker = (side: 'left' | 'right') => (
 export const createSpotifySpatial = (soundCheck: HTMLElement) => {
   let appListStamp = "";
   let picker!: HTMLSelectElement;
+  let routing!: HTMLDetailsElement;
+  let recall!: HTMLButtonElement;
   let output!: HTMLHeadingElement;
   let diagram!: HTMLDivElement;
   let stage!: SVGPathElement;
@@ -39,21 +42,31 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
   let soundSettings!: HTMLButtonElement;
   let pairOutput!: HTMLButtonElement;
   let cancelResume!: HTMLButtonElement;
+  let retryTracking!: HTMLButtonElement;
   let facing!: HTMLSpanElement;
   let lastAngle = 0;
+  let lastPoseAt = 0;
+  let poseInterval = 0;
   let active = false;
+  let diagramVisible = false;
   let observer: DeviceId | null = null;
+  let watchingRoutes = false;
   let displayedPose: typeof store.spotifyPose = null;
   function observe(id: DeviceId | null) {
-    if (observer === id) return;
-    observer = id;
-    store.spotifyOutput = null;
-    store.spotifyLevels = null;
-    paintLevels();
-    displayedPose = store.spotifyPose = null;
-    lastAngle = 0;
-    listener.style.transform = 'rotate(0deg)';
-    post({ type: 'watchSpotifyRoom', id });
+    const showRoutes = id !== null && routing.open;
+    if (observer === id && watchingRoutes === showRoutes) return;
+    if (observer !== id) {
+      observer = id;
+      store.spotifyOutput = null;
+      store.spotifyLevels = null;
+      paintLevels();
+      displayedPose = store.spotifyPose = null;
+      lastAngle = 0;
+      lastPoseAt = poseInterval = 0;
+      listener.style.transform = 'rotate(0deg)';
+    }
+    watchingRoutes = showRoutes;
+    post({ type: 'watchSpotifyRoom', id, value: showRoutes });
   }
 
   const modes = createSegmented<SpotifyMode>({
@@ -66,6 +79,16 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     onChange: name => {
       const d = current();
       if (d && live(d)?.ready) post({ type: 'spotifySpatialMode', id: d.id, name });
+    },
+  });
+  function selectSource(name: SpatialSource) {
+    post({ type: 'setSpatialPlayer', name, id: current()?.id });
+  }
+  const remember = createSwitchRow({
+    id: 'room-remember-sound', title: 'room.rememberSound', desc: 'room.rememberSoundHint',
+    onChange: value => {
+      const d = current(), source = store.spotifySpatial?.source;
+      if (d && source && live(d)?.ready) post({ type: 'rememberAppSound', id: d.id, name: source, value });
     },
   });
   const widths = { narrow: 20, standard: 30, wide: 55 } as const;
@@ -84,16 +107,13 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     onChange: name => post({ type: 'setSpatialLevel', name }),
   });
   modes.el.classList.add('wp-room-modes');
+  const outputCaption = <span class="wp-room__output-caption" aria-hidden="true" />;
   const el = (
     <div class="wp-room__body" tabindex="-1">
-      <header class="wp-room__header">
-        <div class="wp-room__route">
-          <small l:text="room.spotifyOutput" />
-          <h2 ref={output} />
-          <p ref={source} />
-        </div>
-      </header>
-      <div class="wp-room__mode-select">{modes.el}</div>
+      <p class="wp-sr"><span l:text="room.spotifyOutput" /> <span ref={output} /></p>
+      <div class="wp-room__top">
+        <div class="wp-room__mode-select">{modes.el}</div>
+      </div>
       <div class="wp-room__field" ref={diagram} aria-hidden="true">
         <svg viewBox="0 0 360 228" aria-hidden="true">
           <g class="wp-room-grid">
@@ -112,8 +132,11 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
         <span class="wp-room-facing" ref={facing} hidden />
       </div>
       <div class="wp-room__console">
+        <p class="wp-room__media" ref={source} hidden />
         <div class="wp-room__feedback">
           <p role="status" ref={status} />
+          <button type="button" class="wp-btn wp-btn--subtle" ref={retryTracking} hidden l:text="spotify.retryTracking"
+            onclick={() => { if (observer) post({ type: 'spotifySpatialMode', id: observer, name: 'tracked' }); }} />
           <button type="button" class="wp-btn wp-btn--subtle" ref={pairOutput} hidden
             onclick={() => { if (observer) post({ type: 'usePairOutput', id: observer }); }} />
           <button type="button" class="wp-btn wp-btn--subtle" ref={soundSettings} hidden l:text="mic.soundSettings"
@@ -146,7 +169,7 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
           </div>
         </div>
       </details>
-      <details class="wp-room__tools wp-tool-details">
+      <details class="wp-room__tools wp-tool-details" ref={routing} ontoggle={() => observe(observer)}>
         <summary>
           <Icon name="adjustments" /><span l:text="room.routing" />
           <span class="wp-room__stream-status" ref={streamStatus} hidden />
@@ -154,7 +177,7 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
         </summary>
         <label class="wp-room__source">
           <span l:text="room.source" />
-          <select ref={picker} onchange={() => post({ type: 'setSpatialPlayer', name: picker.value as SpatialSource })}>
+          <select ref={picker} onchange={() => selectSource(picker.value as SpatialSource)}>
             <option value="windowsMix" l:text="room.windowsMix" />
             <option value="spotify">Spotify</option>
             <option value="mediaPlayer">Windows Media Player</option>
@@ -162,6 +185,13 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
             <option value="appleMusic">Apple Music</option>
           </select>
         </label>
+        <div class="wp-room__remember">
+          {remember.row}
+          <button ref={recall} type="button" class="wp-link" l:text="room.recallSound" hidden onclick={() => {
+            const d = current(), name = store.spotifySpatial?.source;
+            if (d && name && live(d)?.ready) post({ type: 'recallAppSound', id: d.id, name });
+          }} />
+        </div>
         <div class="wp-room__paths">
           <ul ref={routes} l:aria-label="room.activeStreams" />
           <p ref={pathsHint} hidden />
@@ -172,20 +202,26 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
   ) as HTMLDivElement;
 
   function paintLevels() {
+    if (!diagramVisible) return;
     const levels = store.spotifyLevels;
     const current = !!observer && levels?.id === observer;
-    diagram.style.setProperty('--room-left', String(current ? levels.left / 100 : 0));
-    diagram.style.setProperty('--room-right', String(current ? levels.right / 100 : 0));
+    const left = String(current ? levels.left / 100 : 0);
+    const right = String(current ? levels.right / 100 : 0);
+    if (diagram.style.getPropertyValue('--room-left') !== left) diagram.style.setProperty('--room-left', left);
+    if (diagram.style.getPropertyValue('--room-right') !== right) diagram.style.setProperty('--room-right', right);
   }
 
   function paintPose() {
     const pose = store.spotifyPose;
     const usable = store.spotifySpatial?.mode === 'tracked' && !!observer && pose?.id === observer && Number.isFinite(pose.yaw) && Number.isFinite(pose.pitch);
-    setHidden(facing, !usable);
+    // The center button can still be on screen when the diagram has scrolled away.
     setHidden(center, !usable);
+    if (!diagramVisible) return;
+    setHidden(facing, !usable);
     if (!usable) {
       if (displayedPose) {
         lastAngle = 0;
+        lastPoseAt = poseInterval = 0;
         displayedPose = null;
         listener.style.transform = 'rotate(0deg)';
       }
@@ -193,6 +229,19 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     }
     if (displayedPose === pose) return;
     displayedPose = pose;
+    // Some pairs only deliver a heading about every 200 ms. Match the
+    // visual interpolation to the stream cadence so the head keeps moving
+    // between reports. This does not change the audio renderer's pose.
+    const now = performance.now();
+    const firstPose = lastPoseAt === 0;
+    if (lastPoseAt && now - lastPoseAt < 450) {
+      const gap = Math.max(36, Math.min(220, now - lastPoseAt));
+      poseInterval = poseInterval ? poseInterval * .3 + gap * .7 : gap;
+    } else {
+      poseInterval = 120;
+    }
+    lastPoseAt = now;
+    listener.style.setProperty('--room-pose-duration', `${firstPose ? 0 : Math.round(poseInterval)}ms`);
     // Unwrap the heading before CSS interpolation so moving through 180 degrees
     // continues across the rear seam instead of taking a full turn backwards.
     const delta = ((pose.yaw - lastAngle) % 360 + 540) % 360 - 180;
@@ -224,16 +273,21 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     }
     const app = data?.source ?? 'windowsMix';
     if (data?.apps) {
-      const stamp = JSON.stringify(data.apps);
+      const saved = data.profileId === d?.id ? data.rememberedSources ?? [] : [];
+      const stamp = JSON.stringify([data.apps, saved, t('room.savedSource', { app: '' })]);
       if (stamp !== appListStamp) {
         appListStamp = stamp;
+        picker.options[0].text = saved.includes('windowsMix')
+          ? t('room.savedSource', { app: t('room.windowsMix') }) : t('room.windowsMix');
         while (picker.options.length > 1) picker.remove(1);
-        for (const item of data.apps) picker.add(new Option(item.name, item.key));
+        for (const item of data.apps)
+          picker.add(new Option(saved.includes(item.key) ? t('room.savedSource', { app: item.name }) : item.name, item.key));
       }
     }
     if (picker.value !== app) picker.value = app;
     picker.disabled = data?.status === 'starting';
-    const player = picker.selectedOptions[0]?.text ?? '';
+    const player = app === 'windowsMix' ? t('room.windowsMix') :
+      data?.apps?.find(item => item.key === app)?.name ?? picker.selectedOptions[0]?.text ?? '';
     const relevant = !data?.id || data.id === d?.id;
     const mode = ready && relevant ? data?.mode ?? 'stereo' : 'stereo';
     const state = ready && relevant ? data?.status ?? 'idle' : 'idle';
@@ -241,14 +295,27 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     const canObserve = active && ready && store.windowVisible && !document.hidden;
     observe(canObserve ? d.id : null);
     const starting = state === 'starting';
-    modes.set(starting ? data?.startingMode ?? mode : resumeMode ?? mode);
+    const saved = data?.profileId === d?.id && data?.rememberedSources?.includes(app) === true;
+    setChecked(remember.input, saved);
+    setDisabled(remember.input, !ready || starting || (!saved && (data?.rememberedSources?.length ?? 0) >= 24));
+    const wantsRoute = data?.savedMode === 'fixed' || data?.savedMode === 'tracked' || data?.savedEqualizer === true;
+    const canRecall = !!ready && saved && !resumeMode && wantsRoute && (!relevant || !data?.routed ||
+      data.savedMode !== mode || data.savedEqualizer !== data.pcEqEnabled);
+    setHidden(recall, !canRecall && document.activeElement !== recall);
+    setDisabled(recall, !canRecall || starting);
+    if (!canRecall && document.activeElement === recall) { picker.focus(); setHidden(recall, true); }
+    const supportsTracking = !!d && capsOf(d).has('sleepDetection');
+    const selected = starting ? data?.startingMode ?? mode : resumeMode ?? mode;
+    const mixHint = supportsTracking ? 'room.mixIdle' : 'room.mixFixed';
+    modes.showItem('tracked', supportsTracking);
+    modes.set(selected === 'tracked' && !supportsTracking ? 'fixed' : selected);
     modes.lock(!ready);
-    modes.lockItem('tracked', !ready || !d || !capsOf(d).has('sleepDetection'), null);
+    modes.lockItem('tracked', !ready || !supportsTracking, null);
     modes.pause(starting);
-    setAttr(diagram, 'data-mode', state === 'trackingMic' ? 'fixed' : mode);
+    setAttr(diagram, 'data-mode', mode === 'tracked' && state !== 'playing' && state !== 'waiting' ? 'fixed' : mode);
     setAttr(diagram, 'data-offline', ready ? null : '');
     const media = store.nowPlaying;
-    const routed = !!d && data?.id === d.id && mode !== 'stereo';
+    const routed = !!d && data?.id === d.id && (data.routed || mode !== 'stereo');
     const activePaths = routed ? data?.paths ?? [] : [];
     const mediaKey = media?.spatialSource === undefined && media?.app.toLowerCase() === 'spotify' ? 'spotify' : media?.spatialSource;
     const mediaPaths = mediaKey ? activePaths.filter(path => path.key === mediaKey) : [];
@@ -266,7 +333,7 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
           {path === 'direct' && key && key !== app && selectable.has(key)
             ? <button type="button" class="wp-link" l:text="room.useAsSource"
                 aria-label={t('room.useSourceNamed', { app: name })}
-                onclick={() => post({ type: 'setSpatialPlayer', name: key })} /> : ''}
+                onclick={() => selectSource(key)} /> : ''}
         </li>
       )));
     }
@@ -276,24 +343,26 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     setHidden(pathsHint, !separate);
     setHidden(streamStatus, !separate);
     if (separate) setText(streamStatus, t('room.bypass'));
-    setHidden(check, !routed || state === 'starting');
+    setHidden(check, !routed || mode === 'stereo' || state === 'starting');
     const currentOutput = store.playbackOutput?.id === d?.id ? store.playbackOutput?.defaultOutput : null;
     const playerOutput = store.spotifyOutput?.id === d?.id ? store.spotifyOutput : null;
     const stereoOutput = app === 'windowsMix' ? currentOutput ?? playerOutput : playerOutput;
     const pairOutputSelected = routed || stereoOutput?.onPair === true;
-    setText(output, !ready ? t('status.notConnected') : pairOutputSelected ? d.name : stereoOutput?.name ??
-      t(track || app === 'windowsMix' ? 'room.noActiveOutput' : 'room.standbyOutput', { player }));
-    setAttr(output, 'title', ready ? stereoOutput?.name ?? null : null);
+    const outputName = !ready ? t('status.notConnected') : pairOutputSelected ? d.name : stereoOutput?.name ??
+      t(track || app === 'windowsMix' ? 'room.noActiveOutput' : 'room.standbyOutput', { player });
+    setText(output, outputName);
+    setText(outputCaption, outputName);
+    setAttr(outputCaption, 'title', outputName);
     setText(source, track?.title ? [track.title, track.artist].filter(Boolean).join(' · ') : '');
     setHidden(source, !track?.title);
-    const playing = mode === 'tracked' ? 'room.playingTracked' : 'room.playingFixed';
+    const playing = mode === 'stereo' ? 'room.stereo' : mode === 'tracked' ? 'room.playingTracked' : 'room.playingFixed';
     const pairIsDefault = currentOutput?.onPair === true;
     const showOutputAction = ready && !pairIsDefault &&
       (state === 'usePairDefault' || (state === 'outputChanged' && app === 'windowsMix'));
     const canSwitchOutput = showOutputAction && !!store.otherOutput && store.outputAction !== 'settings';
     setText(status, t(starting ? 'spotify.starting' : resumeMode ? `spotify.${data?.resumeReason ?? 'callPaused'}` : !ready ? 'audioMotion.connect' : state === 'playing' ? playing :
-      state === 'idle' ? app === 'windowsMix' ? 'room.mixIdle' : 'room.stereo' :
-      state === 'usePairDefault' && pairIsDefault ? 'room.mixIdle' :
+      state === 'idle' ? app === 'windowsMix' ? mixHint : 'room.stereo' :
+      state === 'usePairDefault' && pairIsDefault ? mixHint :
       state === 'waiting' && bypass ? 'room.directWaiting' :
       state === 'waiting' && app === 'windowsMix' ? 'room.mixWaiting' : `spotify.${state}`, { player }));
     setHidden(pairOutput, !canSwitchOutput);
@@ -302,12 +371,34 @@ export const createSpotifySpatial = (soundCheck: HTMLElement) => {
     setHidden(soundSettings, !showOutputAction || canSwitchOutput);
     setText(cancelResume, t(starting ? 'home.cancel' : 'room.cancelResume'));
     setHidden(cancelResume, !starting && !resumeMode);
+    setHidden(retryTracking, state !== 'noMotion' || !canObserve);
+    paintLevels();
     paintPose();
   }
   const visibility = () => render();
+  const diagramObserver = new IntersectionObserver(entries => {
+    if (!active) return;
+    diagramVisible = entries[entries.length - 1].isIntersecting;
+    if (diagramVisible) {
+      paintLevels();
+      paintPose();
+    } else {
+      lastPoseAt = 0;
+    }
+  });
   return {
-    el, render, paintPose, paintLevels,
-    enter() { active = true; document.addEventListener('visibilitychange', visibility); render(); },
-    leave() { active = false; document.removeEventListener('visibilitychange', visibility); observe(null); },
+    el, routing, outputCaption, render, paintPose, paintLevels,
+    enter() {
+      active = true;
+      diagramObserver.observe(diagram);
+      document.addEventListener('visibilitychange', visibility);
+      render();
+    },
+    leave() {
+      active = diagramVisible = false;
+      diagramObserver.disconnect();
+      document.removeEventListener('visibilitychange', visibility);
+      observe(null);
+    },
   };
 };

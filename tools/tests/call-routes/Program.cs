@@ -61,13 +61,34 @@ Check(AudioEndpoints.ComparePlaybackChoice(speakers, buds, speakers) == AudioEnd
 Check(AudioEndpoints.ComparePlaybackChoice(speakers, buds, buds) == AudioEndpoints.PlaybackChange.Selected, "AirPods were already selected.");
 Check(AudioEndpoints.ComparePlaybackChoice(speakers, buds, hdmi) == AudioEndpoints.PlaybackChange.Superseded, "Stale request overwrote a new media output.");
 Check(AudioEndpoints.ComparePlaybackChoice(speakers, buds, null) == AudioEndpoints.PlaybackChange.Superseded, "Disconnected output was treated as the original.");
+Check(AudioEndpoints.ComparePlaybackChoice(null, buds, null) == AudioEndpoints.PlaybackChange.Pending, "A call mic cannot be chosen when Windows has no call default.");
+Check(AudioEndpoints.ComparePlaybackChoice(null, buds, speakers) == AudioEndpoints.PlaybackChange.Superseded, "A call mic choice would replace a newer valid default.");
 int? Channels(string id) => id == buds ? 2 : id == "call" ? 1 : null;
 Check(AudioEndpoints.SelectPairRenderEndpoint([buds, "call"], "call", Channels, false) == "call", "The user's default playback should remain selected for general audio.");
 Check(AudioEndpoints.SelectPairRenderEndpoint([buds, "call"], "call", Channels, true) == buds, "Spatial playback chose a mono Hands-Free endpoint.");
 Check(AudioEndpoints.SelectPairRenderEndpoint([buds, "call"], null, Channels, false) == buds, "The stereo endpoint was lost when Windows used another device.");
 Check(AudioEndpoints.SelectPairRenderEndpoint([buds, "unknown"], null, Channels, true) == null, "An ambiguous endpoint was selected automatically.");
 Check(AudioEndpoints.SelectPairRenderEndpoint(["call"], null, Channels, true) == null, "A mono-only device was offered spatial playback.");
+Check(AudioEndpoints.OutputSilence(true, 0f) == AudioEndpoints.PlaybackSilence.Muted, "Mute should explain a zero volume on a muted output.");
+Check(AudioEndpoints.OutputSilence(false, 0f) == AudioEndpoints.PlaybackSilence.ZeroVolume, "Zero Windows master volume was lost.");
+Check(AudioEndpoints.OutputSilence(false, .001f) == AudioEndpoints.PlaybackSilence.None, "Quiet playback was mistaken for silence.");
 Console.WriteLine("Passed call handoff, per-role recovery, repeated restoration, and post-call output reselection.");
+
+var music = new AudioEndpoints.MediaPlayerRoute("Spotify", true, false);
+var browser = new AudioEndpoints.MediaPlayerRoute("msedge", true, false);
+AudioEndpoints.PlayerStream[] split = [new("", @"C:\Apps\Spotify.exe", true, true), new("", @"C:\Apps\msedge.exe", false, true)];
+Check(AudioEndpoints.SelectPairPlayer(split, [browser, music], true) == 1, "A gesture selected a player on different speakers.");
+Check(AudioEndpoints.SelectPairPlayer(split, [music, music with { Playing = false, Paused = true }], true) == -1,
+    "Two player sessions with the same app identity were treated as one.");
+var paused = music with { Playing = false, Paused = true };
+AudioEndpoints.PlayerStream[] parked = [split[0] with { Active = false }, split[1]];
+Check(AudioEndpoints.SelectPairPlayer(parked, [paused, browser], false) == -1 &&
+    AudioEndpoints.SelectPairPlayer(parked, [paused, browser], true) == 0, "Paused playback was selected for the wrong action.");
+Check(AudioEndpoints.SelectPairPlayer([split[0], split[1] with { OnPair = true }], [music, browser], true) == -1,
+    "A gesture targeted one of two streams playing through the AirPods.");
+Check(AudioEndpoints.SelectPairPlayer([split[0], split[0] with { OnPair = false }], [music], true) == -1,
+    "A player with conflicting active outputs was treated as safe to control.");
+Console.WriteLine("Passed player routing for head gestures and in-ear playback, including ambiguous and paused sessions.");
 
 if (args.Contains("--windows-routes"))
 {

@@ -65,7 +65,7 @@ On AirPods Pro 3, start a recording to see your heart rate as it changes. Adjust
 
 The private beta targets **Windows 11 on x64**. Windows 10 compatibility is pending verification and depends on the [supported .NET 10 Windows versions](https://learn.microsoft.com/en-us/dotnet/core/install/windows#supported-versions).
 
-1. Download **Parity Setup** from the [current prerelease](https://github.com/owenawsong/parity/releases/tag/v0.19.1). The release includes a SHA-256 checksum. Setup is unsigned. Quit Parity from the tray before updating.
+1. Download **Parity Setup** from the [current prerelease](https://github.com/owenawsong/parity/releases/tag/v0.19.2). The release includes a SHA-256 checksum. Setup is unsigned. Quit Parity from the tray before updating.
 2. Select **Add full AirPods controls** for listening modes, EQ, and other earbud settings. This installs a background Bluetooth service and may briefly interrupt Bluetooth devices. Windows asks for administrator approval. Leave the box clear for a desktop-only install that uses the existing Windows Bluetooth setup.
 3. Restart Windows if Setup asks, then pair your AirPods in Windows and open **Parity** from Start.
 

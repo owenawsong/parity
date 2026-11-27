@@ -141,6 +141,8 @@ public sealed class MicPipeline
     private bool _keepOn;
     // The AirPods' latest audio state report has their mic streaming.
     private bool _micOn;
+    private bool _shuttingDown;
+    private TaskCompletionSource<bool>? _micOff;
     // Hands-Free has the AirPods mic during call audio (seen by the service or reported in 0x0E) or while an app records
     // from the Hands-Free mic. No START then: the AirPods' own mic stream running into it makes the controller fail.
     private bool _handsFreeAudio;
@@ -214,6 +216,11 @@ public sealed class MicPipeline
 
     public bool Capturing => _capturing;
 
+    internal bool WaitingForMicRelease
+    {
+        get { lock (_lock) return _micOn && !_capturing && !_keepOn && !_directListener; }
+    }
+
     /// <summary>Call audio on the attached pair, or, while capturing, an app recording from its Hands-Free mic.</summary>
     public bool HandsFreeInUse
     {
@@ -250,6 +257,33 @@ public sealed class MicPipeline
                 return Task.CompletedTask;
             }
             return StopLocked(session, "before detach");
+        }
+    }
+
+    // Let the earbuds release their mic before closing the controls pipe. Keep
+    // low-latency and stall timers from restarting the stream during shutdown.
+    public async Task ShutdownStreamAsync()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
+        Task<bool> confirmation;
+        Task write;
+        lock (_lock)
+        {
+            _shuttingDown = true;
+            if (_session is not { } session || (!_startSent && !_micOn)) return;
+            _micOff = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            confirmation = _micOff.Task;
+            write = StopLocked(session, "shutdown", timeout.Token);
+        }
+        try
+        {
+            await write.ConfigureAwait(false);
+            bool confirmed = await confirmation.WaitAsync(timeout.Token).ConfigureAwait(false);
+            Log.Info("mic", confirmed ? "shutdown: mic stream released" : "shutdown: controls detached during mic release");
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            Log.Info("mic", "shutdown: mic-off report timed out");
         }
     }
 
@@ -307,6 +341,7 @@ public sealed class MicPipeline
         {
             if (_session == session)
             {
+                _micOff?.TrySetResult(false);
                 _session = null;
                 _keepOn = false;
                 ResetHandsFreeLocked();
@@ -480,7 +515,7 @@ public sealed class MicPipeline
         ApplyStreamingLocked("capture started");
     }
 
-    private bool StreamingLocked => (_capturing || _keepOn) && Models.HasStereoMic(_session?.State.ModelNumber);
+    private bool StreamingLocked => !_shuttingDown && (_capturing || _keepOn) && Models.HasStereoMic(_session?.State.ModelNumber);
 
     // The AirPods mic streams while someone listens or, in low latency mode, all the time.
     private void ApplyStreamingLocked(string reason)
@@ -578,6 +613,7 @@ public sealed class MicPipeline
             lock (_lock)
             {
                 _micOn = (packet[12] & 0x20) != 0;
+                if (!_micOn) _micOff?.TrySetResult(true);
                 if (_micOn && _startSent && !_started)
                 {
                     _started = true;
@@ -1094,7 +1130,7 @@ public sealed class MicPipeline
 
     // No status change: a detach after a Disconnect makes it NotActive; a later capture start sends START again.
     // Stops the stall timer so no START re-send follows the STOP.
-    private Task StopLocked(AapSession session, string reason)
+    private Task StopLocked(AapSession session, string reason, CancellationToken ct = default)
     {
         _startSent = false;
         _started = false;
@@ -1102,12 +1138,12 @@ public sealed class MicPipeline
         _noAudio = false;
         _timer.Change(Timeout.Infinite, Timeout.Infinite);
         Log.Info("mic", $"STOP sent to {Mac.Format(session.Address)} ({reason})");
-        return WriteStopAsync(session);
+        return WriteStopAsync(session, ct);
     }
 
-    private static async Task WriteStopAsync(AapSession session)
+    private static async Task WriteStopAsync(AapSession session, CancellationToken ct)
     {
-        if (!await session.WriteAsync(StopMicrophone).ConfigureAwait(false))
+        if (!await session.WriteAsync(StopMicrophone, ct).ConfigureAwait(false))
         {
             Log.Warn("mic", "STOP write failed");
         }

@@ -144,8 +144,10 @@
   gap: 18px;
   min-inline-size: 0;
 }
+.wp-audio-motion.wp-audio-workspace { grid-template-columns: minmax(0, 1fr); }
 .wp-audio-workspace .wp-group__title {
   margin-block: 0 7px;
+  padding-inline: var(--audio-inset);
   font: 600 13px/1.4 var(--font-text);
 }
 .wp-audio-workspace .wp-row--nav { gap: 10px; min-height: 49px; }
@@ -162,8 +164,12 @@
 }
 .wp-audio-motion .wp-sound-eq-head h2 { font-size: 16px; }
 .wp-audio-motion .wp-eq-card__mode { flex: 0 1 218px; min-inline-size: 170px; padding: 0; }
-.wp-audio-motion .wp-eq-card__mode .wp-seg__face { min-height: 27px; }
-.wp-audio-motion .wp-eq-card__bands { --fader-height: clamp(108px, 20vh, 146px); padding-block: 14px 11px; }
+.wp-audio-workspace :is(.wp-eq-card__mode, .wp-room__mode-select, .wp-input-setting) .wp-seg__face {
+  min-height: 32px;
+  padding-block: 4px;
+  overflow-wrap: anywhere;
+}
+.wp-audio-motion .wp-eq-card__bands { --fader-height: clamp(106px, 17dvh, 132px); padding-block: 12px 14px; }
 .wp-playback-behavior .wp-sound-playback .wp-row { padding-block: 12px; }
 .wp-playback-behavior .wp-duck-setting:not([hidden]) { padding: 0 16px 15px; }
 .wp-playback-behavior .wp-duck-setting input { min-height: 25px; }

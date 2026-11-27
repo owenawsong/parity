@@ -16,7 +16,10 @@ internal sealed partial class TrayApp
     private string _spotifyMode = "stereo", _spotifyStatus = "idle";
     private ulong _spotifyNoticeAddress;
     private bool _spotifyHasPose;
+    private readonly HeadTrackingRetry _trackingRetry = new();
+    private (EarStatus? Primary, EarStatus? Secondary) _trackingWear;
     private ulong _spotifyRoomViewer;
+    private bool _spotifyRoutingViewer;
     private readonly System.Windows.Forms.Timer _roomMeter = new() { Interval = 80 };
     private readonly System.Windows.Forms.Timer _stereoOutputTimer = new() { Interval = 2200 };
     private int _outputRevision;
@@ -42,8 +45,9 @@ internal sealed partial class TrayApp
         var bridge = _spotify;
         try
         {
-            bool refreshSourceList = Environment.TickCount64 >= _nextSourceScan;
-            if (refreshSourceList || bridge != null)
+            bool refreshSourceList = _spotifyRoutingViewer && Environment.TickCount64 >= _nextSourceScan;
+            bool refreshPaths = bridge != null && (_spotifyRoutingViewer || player.IsWindowsMix);
+            if (refreshSourceList || refreshPaths)
             {
                 // Read the cached endpoint IDs before leaving the UI thread. The bridge can
                 // be disposed while Windows enumerates the active render sessions.
@@ -58,7 +62,7 @@ internal sealed partial class TrayApp
                     changed = !_spatialApps.SequenceEqual(apps);
                     _spatialApps = apps;
                 }
-                if (sink != null && pair != null)
+                if (refreshPaths && sink != null && pair != null)
                 {
                     var paths = SpatialApp.PlaybackPaths(sessions, sink, pair);
                     changed |= !_playbackPaths.SequenceEqual(paths);
@@ -93,21 +97,27 @@ internal sealed partial class TrayApp
     private int _lastLevels = -1;
     private (double Yaw, double Pitch)? _lastShownPose;
 
-    private void WatchSpotifyRoom(ulong address)
+    private void WatchSpotifyRoom(ulong address, bool showRoutes)
     {
+        if (_spotifyRoomViewer == address && _spotifyRoutingViewer == showRoutes) return;
         _outputRevision++;
+        if (_spotifyRoomViewer != address)
+        {
+            _lastShownPose = null;
+            _lastLevels = -1;
+        }
         _spotifyRoomViewer = address;
+        _spotifyRoutingViewer = showRoutes;
         _nextSourceScan = 0;
-        _lastShownPose = null;
-        _lastLevels = -1;
-        _playbackPaths = [];
-        UpdateRoomMeter();
+        if (address == 0 || (!showRoutes && !_spatialPlayer.IsWindowsMix)) _playbackPaths = [];
+        SendSpotify();
         if (_stereoOutputTimer.Enabled) ReadStereoOutput();
     }
 
     private void UpdateRoomMeter()
     {
         if (_exiting) return;
+        UpdateSpatialMotionPollRate();
         bool enabled = _spotifyRoomViewer != 0 && _spotifySession?.Address == _spotifyRoomViewer && _spotify != null &&
             MainLive && !_mainCompact && _main?.WindowState != FormWindowState.Minimized;
         if (_spotify is { } bridge) bridge.Metering = enabled;
@@ -120,6 +130,17 @@ internal sealed partial class TrayApp
             _stereoOutputTimer.Enabled = readStereo;
             if (readStereo) ReadStereoOutput();
         }
+    }
+
+    private void UpdateSpatialMotionPollRate()
+    {
+        if (_headMotionTest is not { SpatialRequest: SpotifyMotionRequest, Status: "ready" } motion) return;
+        bool drawing = _spotifyRoomViewer == motion.Session.Address && MainLive &&
+            !_mainCompact && _main?.WindowState != FormWindowState.Minimized;
+        // Audio still receives each sensor packet directly. The slower poll
+        // just checks for signal loss when the diagram is out of view.
+        int interval = drawing ? 32 : 125;
+        if (_headMotionTimer.Interval != interval) _headMotionTimer.Interval = interval;
     }
 
     private void RoomMeterTick(object? sender, EventArgs args)
@@ -204,31 +225,46 @@ internal sealed partial class TrayApp
                     await TryResumeSpatial(resume);
                     return;
                 }
-                if (!SpotifyRouting.AnyPending && !WindowsSpatialMix.Pending) _spotifyTimer.Stop();
+                if (!SpotifyRouting.AnyPending && !WindowsSpatialMix.Pending)
+                {
+                    _spotifyTimer.Stop();
+                    if (_spotifyStatus == "restore")
+                    {
+                        _spotifyStatus = "idle";
+                        SendSpotify();
+                    }
+                }
                 return;
             }
+            bool resumeProcessing = _spotifyMode != "stereo" || _pcEqAddress == _spotifySession?.Address;
             if (_connections.Session != _spotifySession || _spotifySession?.State.Status != SessionStatus.Ready)
             {
                 bool wasRequested = _spotifySession != null && Volatile.Read(ref _spatialDisconnectAddress) == _spotifySession.Address;
                 var active = _connections.Session;
-                if (!wasRequested && _spotifySession is { } previous && (active == null || active.Address == previous.Address))
+                if (resumeProcessing && !wasRequested && _spotifySession is { } previous &&
+                    (active == null || active.Address == previous.Address))
                 {
                     _spatialResume = new(previous, _spatialPlayer, _spotifyMode, bridge.OriginalRoute,
                         Reason: "reconnectingAudio", RejoinUntil: Environment.TickCount64 + 25_000);
                     await CloseSpotify("reconnectingAudio");
                 }
-                else await CloseSpotify(wasRequested ? "idle" : "ended");
+                else
+                {
+                    if (_pcEqAddress == _spotifySession?.Address) ClearPcEqMode();
+                    await CloseSpotify(wasRequested ? "idle" : "ended");
+                }
                 return;
             }
             if (_spotifySession.CallAudio || _mic.HandsFreeInUse)
             {
-                _spatialResume = new(_spotifySession, _spatialPlayer, _spotifyMode, bridge.OriginalRoute);
-                await CloseSpotify("callPaused");
+                if (resumeProcessing)
+                    _spatialResume = new(_spotifySession, _spatialPlayer, _spotifyMode, bridge.OriginalRoute);
+                await CloseSpotify(resumeProcessing ? "callPaused" : "idle");
                 return;
             }
             if (bridge.Failed)
             {
-                if (Environment.TickCount64 - _bridgeStartedAt < 6000)
+                if (!resumeProcessing || Environment.TickCount64 - _bridgeStartedAt < 6000)
                 {
                     await CloseSpotify("ended");
                     return;
@@ -255,20 +291,15 @@ internal sealed partial class TrayApp
                 return active && bridge.HasSignal ? "playing" : "waiting";
             });
             if (status is "ended" or "virtualBusy") { await CloseSpotify(status); return; }
-            if (_spotifyMode == "tracked" && !_spotifyHasPose)
+            bool eqSignal = _pcEqAddress == _spotifySession.Address && status == "playing";
+            bool eqChanged = _lastPcEqSignal != eqSignal;
+            _lastPcEqSignal = eqSignal;
+            if (_spotifyMode == "tracked" && !UpdateHeadTracking(_spotifySession))
             {
-                if (_spotifyStatus == "trackingMic")
-                {
-                    if (_mic.Capturing || _mic.Status != MicStatus.NotActive) return;
-                    _spotifyStatus = "calibrating";
-                    StartHeadMotion(_spotifySession.Address, false, SpotifyMotionRequest);
-                    SendSpotify();
-                    return;
-                }
-                status = "calibrating";
+                if (eqChanged) SendSpotify();
+                return;
             }
-            if (_spotifyStatus == "noMotion" && _spotifyMode == "fixed") return;
-            if (_spotifyStatus != status) { _spotifyStatus = status; SendSpotify(); }
+            if (_spotifyStatus != status || eqChanged) { _spotifyStatus = status; SendSpotify(); }
         }
         catch (Exception e)
         {
@@ -331,40 +362,77 @@ internal sealed partial class TrayApp
         }
     }
 
-    private async void SetSpatialPlayer(SpatialApp player)
+    private async void SetSpatialPlayer(SpatialApp player, ulong requestedAddress, bool recall = false)
     {
-        Interlocked.Increment(ref _spatialChoiceRevision);
+        if (!recall && player == _spatialPlayer && _spotifyGate.CurrentCount != 0) return;
+        int revision = Interlocked.Increment(ref _spatialChoiceRevision);
+        var previousMode = _spatialStartingMode ?? _spatialResume?.Mode ?? _spotifyMode;
+        _spatialStartup?.Cancel();
         await _spotifyGate.WaitAsync();
         try
         {
-            if (_exiting || player == _spatialPlayer) return;
-            var previousMode = _spotifyMode;
-            var address = _spotifySession?.Address;
+            if (_exiting || revision != _spatialChoiceRevision ||
+                (requestedAddress != 0 && _connections.Session is { State.Status: SessionStatus.Ready } active &&
+                    active.Address != requestedAddress)) return;
+            ulong address = _connections.Session is { State.Status: SessionStatus.Ready } session &&
+                (requestedAddress == 0 || requestedAddress == session.Address) ? session.Address : 0;
+            var saved = address == 0 ? null : AppSoundFor(address, player.Key);
+            bool usePairDefaults = address != 0 && saved == null && SavedSoundSources(address).Any();
             bool wasSuspended = _spatialResume != null;
             _spatialResume = null;
-            if (_spotify != null || wasSuspended) await CloseSpotify("idle");
-            try { SpatialApp.RememberSelection(player); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            { Log.Warn("spatial", $"Could not save app selection: {e.Message}"); }
-            _spatialPlayer = player;
-            SavePrefs(_prefs with { SpatialPlayer = player.Key });
-            _spotifyStatus = "idle";
+            if (player != _spatialPlayer && (_spotify != null || wasSuspended)) await CloseSpotify("idle");
+            if (_exiting || revision != _spatialChoiceRevision) return;
+            if (player != _spatialPlayer)
+            {
+                try { SpatialApp.RememberSelection(player); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                { Log.Warn("spatial", $"Could not save app selection: {e.Message}"); }
+                _spatialPlayer = player;
+                SavePrefs(_prefs with { SpatialPlayer = player.Key });
+            }
+            _spotifyStatus = SpotifyRouting.AnyPending || WindowsSpatialMix.Pending ? "restore" : "idle";
             _outputRevision++;
-            if (address.HasValue && previousMode != "stereo") await ChangeSpatialMode(address.Value, previousMode);
-            else { ReadStereoOutput(); SendSpotify(); }
+            _nextSourceScan = 0;
+
+            var mode = saved?.Mode is "fixed" or "tracked" ? saved.Mode : saved != null || usePairDefaults ? "stereo" : previousMode;
+            if (address != 0)
+            {
+                if (saved != null || usePairDefaults)
+                {
+                    _pcEqAddress = saved?.Equalizer == true ? address : 0;
+                    _pcEqCompareFlat = false;
+                }
+                if (mode == "tracked" && (_connections.Session?.State.Capabilities & DeviceCapabilities.SleepDetection) != DeviceCapabilities.SleepDetection)
+                    mode = "fixed";
+                _spotifyNoticeAddress = address;
+                if (_spotifySession?.Address == address) ApplyPcEq(address);
+                SendPcEq(address);
+                if (_spotify != null || mode != "stereo" || _pcEqAddress == address)
+                {
+                    await ChangeSpatialMode(address, mode);
+                    return;
+                }
+            }
+            if (requestedAddress != 0 && requestedAddress != address) SendPcEq(requestedAddress);
+            ReadStereoOutput();
+            SendSpotify();
         }
         finally { _spotifyGate.Release(); }
     }
 
-    private async void SetSpotifyMode(ulong address, string mode)
+    private async void SetSpotifyMode(ulong address, string mode, bool remember = false)
     {
         int revision = Interlocked.Increment(ref _spatialChoiceRevision);
         if (address == _spotifyNoticeAddress && mode != _spatialStartingMode) _spatialStartup?.Cancel();
         await _spotifyGate.WaitAsync();
         try
         {
-            if (revision != _spatialChoiceRevision) return;
-            if (_spatialResume is { } resume && resume.Session.Address == address && mode != "stereo")
+            if (_exiting || revision != _spatialChoiceRevision) return;
+            if (remember && _connections.Session is { State.Status: SessionStatus.Ready } session &&
+                session.Address == address && (mode != "tracked" ||
+                    (session.State.Capabilities & DeviceCapabilities.SleepDetection) != 0))
+                RememberAppMode(address, mode);
+            if (_spatialResume is { } resume && resume.Session.Address == address && (mode != "stereo" || _pcEqAddress == address))
             {
                 _spatialResume = resume with { Mode = mode };
                 SendSpotify();
@@ -407,7 +475,7 @@ internal sealed partial class TrayApp
         {
             if (_exiting) return;
             _spotifyNoticeAddress = address;
-            if (mode == "stereo") { await CloseSpotify("idle"); return; }
+            if (mode == "stereo" && _pcEqAddress != address) { await CloseSpotify("idle"); return; }
             if (expected == null && Volatile.Read(ref _spatialDisconnectAddress) == address)
                 Volatile.Write(ref _spatialDisconnectAddress, 0);
             if (_connections.Session is not { State.Status: SessionStatus.Ready } session || session.Address != address ||
@@ -448,11 +516,15 @@ internal sealed partial class TrayApp
                     var output = await Task.Run(() => AudioEndpoints.SpatialPlaybackIdAsync(address, timeout.Token, expected?.Pair));
                     if (Interruption() is { } interrupted) { await AbortStart(interrupted); return; }
                     if (output == null) { await AbortStart("noOutput"); return; }
-                    _spotify = await Task.Run(() => new SpotifyBridge(_spatialPlayer, output, address, () => Interruption() is null, expected));
+                    _spotify = await Task.Run(() => new SpotifyBridge(_spatialPlayer, output, address,
+                        () => Interruption() is null, expected,
+                        () => !_exiting && _connections.Session == session && session.State.Status == SessionStatus.Ready &&
+                            Volatile.Read(ref _spatialDisconnectAddress) != address && !session.CallAudio && !_mic.HandsFreeInUse,
+                        spatial: mode != "stereo"));
                     _bridgeStartedAt = Environment.TickCount64;
-                    _spotify.SetSpeakerAngle(_prefs.SpatialSpeakerAngle);
-                    _spotify.SetLevel(_prefs.SpatialLevel);
                     _spotifySession = session;
+                    ApplySpatialRenderPrefs(address);
+                    ApplyPcEq(address);
                     session.CallAudioChanged += OnSpatialCallAudioChanged;
                 }
                 finally
@@ -463,6 +535,7 @@ internal sealed partial class TrayApp
             }
             if (Interruption() is { } reason) { await AbortStart(reason); return; }
             _spatialResume = null;
+            _spotify.SetSpatial(mode != "stereo");
             bool alreadyTracking = _spotifyMode == "tracked" && _headMotionTest?.SpatialRequest == SpotifyMotionRequest;
             if (mode == "tracked" && alreadyTracking) { SendSpotify(); return; }
             _spotifyMode = mode;
@@ -472,10 +545,10 @@ internal sealed partial class TrayApp
             {
                 _spotifyHasPose = false;
                 _lastShownPose = null;
-                _spotifyStatus = "calibrating";
-                StartHeadMotion(address, false, SpotifyMotionRequest);
+                _trackingRetry.Reset();
+                UpdateHeadTracking(session);
             }
-            else if (mode == "fixed")
+            else
             {
                 StopSpatialMotion(address, SpotifyMotionRequest);
                 _spotify.Pose(0);
@@ -505,6 +578,7 @@ internal sealed partial class TrayApp
     private async Task CloseSpotify(string reason)
     {
         _lastLevels = -1;
+        _lastPcEqSignal = false;
         _playbackPaths = [];
         var bridge = _spotify;
         var session = _spotifySession;
@@ -531,12 +605,13 @@ internal sealed partial class TrayApp
         {
             if (!_spotifyHasPose)
             {
+                _trackingRetry.Reset();
                 _spotifyHasPose = true;
                 _spotifyStatus = _spotify.HasSignal ? "playing" : "waiting";
                 SendSpotify();
             }
         }
-        else if (status is not ("waiting" or "calibrating"))
+        else if (status is not ("waiting" or "calibrating" or "stopped"))
         {
             if (_spotifySession.CallAudio || _mic.HandsFreeInUse)
             {
@@ -545,18 +620,63 @@ internal sealed partial class TrayApp
             }
             if (status == "micInUse" || _mic.Capturing || _mic.Status != MicStatus.NotActive)
             {
-                _spotifyHasPose = false;
-                _lastShownPose = null;
-                _spotifyStatus = "trackingMic";
-                _spotify.Pose(0);
-                SendSpotify();
+                _trackingRetry.Reset();
+                SetHeadTrackingStatus("trackingMic");
                 return;
             }
-            _spotifyMode = "fixed";
-            _spotifyStatus = "noMotion";
-            _spotify.Pose(0);
-            SendSpotify();
+            _trackingRetry.Failed(Environment.TickCount64);
+            SetHeadTrackingStatus(_trackingRetry.Exhausted ? "noMotion" : "recoveringMotion");
         }
+    }
+
+    // Leave the playback route in place throughout calibration and retries.
+    private bool UpdateHeadTracking(AapSession session)
+    {
+        var wear = (session.State.PrimaryEar, session.State.SecondaryEar);
+        if (wear != _trackingWear)
+        {
+            _trackingWear = wear;
+            _trackingRetry.Reset();
+        }
+        if (Models.FromModelNumber(session.State.ModelNumber)?.SingleBattery != true &&
+            IsOut(wear.PrimaryEar) && IsOut(wear.SecondaryEar))
+        {
+            SetHeadTrackingStatus("trackingWear");
+            StopSpatialMotion(session.Address, SpotifyMotionRequest);
+            return false;
+        }
+        if (_spotifyHasPose && SpotifyOwnsMotion) return true;
+        if (_headMotionTest is not null || _stoppingHeadMotion)
+        {
+            if (!SpotifyOwnsMotion) SetHeadTrackingStatus("recoveringMotion");
+            return false;
+        }
+        if (_mic.Capturing || _mic.Status != MicStatus.NotActive)
+        {
+            _trackingRetry.Reset();
+            SetHeadTrackingStatus("trackingMic");
+            return false;
+        }
+        if (!_trackingRetry.Due(Environment.TickCount64))
+        {
+            SetHeadTrackingStatus(_trackingRetry.Exhausted ? "noMotion" : "recoveringMotion");
+            return false;
+        }
+        SetHeadTrackingStatus("calibrating");
+        StartHeadMotion(session.Address, false, SpotifyMotionRequest);
+        return false;
+
+        static bool IsOut(EarStatus? ear) => ear is EarStatus.OutOfEar or EarStatus.InCase or EarStatus.Disconnected;
+    }
+
+    private void SetHeadTrackingStatus(string status)
+    {
+        if (_spotifyStatus == status && !_spotifyHasPose) return;
+        _spotifyHasPose = false;
+        _lastShownPose = null;
+        _spotify?.Pose(0);
+        _spotifyStatus = status;
+        SendSpotify();
     }
 
     private void SendSpotify()
@@ -564,11 +684,14 @@ internal sealed partial class TrayApp
         UpdateRoomMeter();
         if (!MainLive || !_mainInitSent) return;
         var w = _writer.Begin("spotifySpatial");
+        ulong profileAddress = _connections.Session?.Address ?? _spotifyRoomViewer;
+        var savedSources = SavedSoundSources(profileAddress).ToArray();
         w.WriteString("source", _spatialPlayer.Key);
-        w.WriteNumber("speakerAngle", SpatialStereo.SpeakerAngle(_prefs.SpatialSpeakerAngle));
-        w.WriteString("level", SpatialStereo.LevelChoice(_prefs.SpatialLevel));
+        var (angle, level) = SpatialRenderPrefs(profileAddress);
+        w.WriteNumber("speakerAngle", angle);
+        w.WriteString("level", level);
         w.WriteStartArray("apps");
-        foreach (var app in _spatialApps.Append(_spatialPlayer).DistinctBy(app => app.Key))
+        foreach (var app in _spatialApps.Append(_spatialPlayer).Concat(savedSources).DistinctBy(app => app.Key))
         {
             if (app.IsWindowsMix) continue;
             w.WriteStartObject();
@@ -577,8 +700,31 @@ internal sealed partial class TrayApp
             w.WriteEndObject();
         }
         w.WriteEndArray();
+        if (profileAddress != 0)
+        {
+            w.WriteString("profileId", Mac.Format(profileAddress));
+            w.WriteStartArray("rememberedSources");
+            foreach (var app in savedSources) w.WriteStringValue(app.Key);
+            w.WriteEndArray();
+            if (AppSoundFor(profileAddress, _spatialPlayer.Key) is { } saved)
+            {
+                var savedMode = saved.Mode switch
+                {
+                    "tracked" => (_connections.Session?.State.Capabilities & DeviceCapabilities.SleepDetection) ==
+                        DeviceCapabilities.SleepDetection ? "tracked" : "fixed",
+                    "fixed" => "fixed",
+                    _ => "stereo",
+                };
+                w.WriteString("savedMode", savedMode);
+                w.WriteBoolean("savedEqualizer", saved.Equalizer);
+            }
+        }
         w.WriteString("mode", _spotifyMode);
         w.WriteString("status", _spotifyStatus);
+        ulong address = _spotifySession?.Address ?? _spotifyNoticeAddress;
+        w.WriteBoolean("routed", _spotify != null);
+        w.WriteBoolean("pcEqEnabled", _pcEqAddress != 0 && _pcEqAddress == address);
+        w.WriteBoolean("pcEqPlaying", _lastPcEqSignal && _spotify != null && _pcEqAddress == address);
         if (_spotifyStatus == "starting" && _spatialStartingMode != null)
             w.WriteString("startingMode", _spatialStartingMode);
         if (_spatialResume is { } resume)
@@ -597,7 +743,6 @@ internal sealed partial class TrayApp
             w.WriteEndObject();
         }
         w.WriteEndArray();
-        ulong address = _spotifySession?.Address ?? _spotifyNoticeAddress;
         w.WriteString("id", address == 0 ? null : Mac.Format(address));
         PostMain(_writer.End());
     }

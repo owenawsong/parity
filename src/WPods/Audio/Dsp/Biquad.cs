@@ -58,10 +58,12 @@ internal sealed class Biquad
     }
 
     /// <summary>Filters the samples in place.</summary>
-    public void Process(Span<float> samples)
+    public void Process(Span<float> samples) => ProcessChannel(samples, 0, 1);
+
+    internal void ProcessChannel(Span<float> samples, int channel, int stride)
     {
         float z1 = _z1, z2 = _z2;
-        for (int i = 0; i < samples.Length; i++)
+        for (int i = channel; i < samples.Length; i += stride)
         {
             float x = samples[i];
             float y = _b0 * x + z1;

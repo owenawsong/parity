@@ -96,7 +96,7 @@ public sealed partial class NearbyService : IDisposable
     /// </summary>
     public event Action? NearbyChanged;
 
-    /// <summary>A charging case reported a fresh battery reading. Raised on the BLE thread.</summary>
+    /// <summary>A battery reading from or about a charging case changed. Raised on the BLE thread.</summary>
     internal event Action? CaseBatteryChanged;
 
     internal PodBatteries? GetNearbyBatteries(ulong address)
@@ -112,6 +112,14 @@ public sealed partial class NearbyService : IDisposable
         lock (_lock)
         {
             return _pairs.GetValueOrDefault(address)?.CaseBroadcast;
+        }
+    }
+
+    internal CaseBudBroadcast? GetCaseBudBroadcast(ulong address)
+    {
+        lock (_lock)
+        {
+            return _pairs.GetValueOrDefault(address)?.CaseBudBroadcast;
         }
     }
 
@@ -165,6 +173,7 @@ public sealed partial class NearbyService : IDisposable
         Log.Info("nearby", "start");
         _self = GCHandle.Alloc(this);
         _connections.LinkChanged += OnLinkChanged;
+        _connections.Ready += OnSessionReady;
         if (AppIdentity.IsPairside) _connections.DisconnectRequested += OnDisconnectRequested;
         _connections.DevicesChanged += Refresh;
         Refresh();
@@ -183,6 +192,7 @@ public sealed partial class NearbyService : IDisposable
 
     private async Task ConnectAsync(ulong address, long? automaticCycle)
     {
+        using var cancel = new CancellationTokenSource();
         var link = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Pair? pair;
         lock (_lock)
@@ -204,6 +214,7 @@ public sealed partial class NearbyService : IDisposable
                 _connections.Session != null || _pairs.Values.Any(p => p.LinkUp || p.Link != null)))
                 return;
             pair.Link = link;
+            pair.ConnectCancellation = cancel;
             // SetLinkUp completes the wait only when the link comes up; a Retry after a failed attach finds it up already.
             if (pair.LinkUp)
             {
@@ -218,11 +229,12 @@ public sealed partial class NearbyService : IDisposable
         // One 10 s budget for link up and attach. A refused request (hr < 0) still waits: Windows or the AirPods may
         // connect anyway, and only "no link" or "no attach" within the budget is a failure.
         long deadline = Environment.TickCount64 + (long)ConnectTimeout.TotalMilliseconds;
+        cancel.CancelAfter(ConnectTimeout);
         bool RequestIsCurrent()
         {
             lock (_lock)
             {
-                return _hardwareControlsAvailable && !_disposed && pair.Link == link &&
+                return !cancel.IsCancellationRequested && _hardwareControlsAvailable && !_disposed && pair.Link == link &&
                     (!automaticCycle.HasValue || (pair.OfferCycle == automaticCycle && !pair.Reconnect.Held &&
                     _connections.DisconnectFinished(address).IsCompleted &&
                     _connections.Settings.Ui.AutoConnectDevices.Contains(Mac.Format(address)) &&
@@ -235,27 +247,19 @@ public sealed partial class NearbyService : IDisposable
             {
                 if (!RequestIsCurrent()) throw new TaskCanceledException();
                 return NearbyNative.wpn_bt_connect_audio(address);
-            }).ConfigureAwait(false);
+            }, cancel.Token).ConfigureAwait(false);
             Log.Info("nearby", $"connect {Mac.Format(address)}: connect audio hr=0x{hr:X8}");
-            await link.Task.WaitAsync(Remaining(deadline)).ConfigureAwait(false);
+            await link.Task.WaitAsync(cancel.Token).ConfigureAwait(false);
             Log.Info("nearby", $"connect {Mac.Format(address)}: link up, attaching");
-            bool attached = await _connections.ConnectAsync(address, RequestIsCurrent).ConfigureAwait(false)
-                || (RequestIsCurrent() && await WaitForAttachAsync(address, deadline).ConfigureAwait(false));
-            Log.Info("nearby", $"connect {Mac.Format(address)}: attached={attached}");
-            if (attached)
+            await _connections.ConnectAsync(address, RequestIsCurrent, cancel.Token).ConfigureAwait(false);
+            if (RequestIsCurrent() && await WaitForReadyAsync(address, deadline, cancel.Token).ConfigureAwait(false))
             {
                 result = OfferState.Connected;
             }
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException)
         {
-            // No link within 10 s.
-            Log.Info("nearby", $"connect {Mac.Format(address)}: no link within 10 s");
-        }
-        catch (TaskCanceledException)
-        {
-            // Cancelled or dismissed; the offer was already updated.
-            Log.Info("nearby", $"connect {Mac.Format(address)}: link wait cancelled");
+            Log.Info("nearby", $"connect {Mac.Format(address)}: cancelled or timed out");
         }
         catch (Exception e)
         {
@@ -269,6 +273,9 @@ public sealed partial class NearbyService : IDisposable
             if (changed)
             {
                 pair.Link = null;
+                pair.ConnectCancellation = null;
+                // The handshake can finish just as the wait expires.
+                if (IsReady(address)) result = OfferState.Connected;
                 pair.Offer = pair.Offer! with { State = result };
                 Publish();
             }
@@ -282,25 +289,28 @@ public sealed partial class NearbyService : IDisposable
 
     private static TimeSpan Remaining(long deadline) => TimeSpan.FromMilliseconds(Math.Max(0, deadline - Environment.TickCount64));
 
-    // ConnectAsync failed but its retry series (or the link-up attach) may still attach the pair within the budget.
-    private async Task<bool> WaitForAttachAsync(ulong address, long deadline)
+    private bool IsReady(ulong address) =>
+        _connections.Session is { State.Status: SessionStatus.Ready } session && session.Address == address;
+
+    // An open control pipe is not ready to use. Wait for the handshake, including any attach retry.
+    private async Task<bool> WaitForReadyAsync(ulong address, long deadline, CancellationToken ct = default)
     {
-        var attached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnAttached(AapSession session)
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnReady(AapSession session)
         {
             if (session.Address == address)
             {
-                attached.TrySetResult();
+                ready.TrySetResult();
             }
         }
-        _connections.Attached += OnAttached;
+        _connections.Ready += OnReady;
         try
         {
-            if (_connections.Session?.Address != address)
+            if (!IsReady(address))
             {
-                await attached.Task.WaitAsync(Remaining(deadline)).ConfigureAwait(false);
+                await ready.Task.WaitAsync(Remaining(deadline), ct).ConfigureAwait(false);
             }
-            return true;
+            return IsReady(address);
         }
         catch (TimeoutException)
         {
@@ -308,7 +318,7 @@ public sealed partial class NearbyService : IDisposable
         }
         finally
         {
-            _connections.Attached -= OnAttached;
+            _connections.Ready -= OnReady;
         }
     }
 
@@ -364,6 +374,7 @@ public sealed partial class NearbyService : IDisposable
     {
         Log.Info("nearby", "dispose");
         _connections.LinkChanged -= OnLinkChanged;
+        _connections.Ready -= OnSessionReady;
         _connections.DisconnectRequested -= OnDisconnectRequested;
         _connections.DevicesChanged -= Refresh;
         if (_radioNotify != 0)
@@ -606,7 +617,7 @@ public sealed partial class NearbyService : IDisposable
                 Log.Info("nearby", "Windows delivered a charging-case battery record");
             }
             Pair? match = null;
-            Battery battery = default;
+            PodBatteries batteries = default;
             AirPodsModel? pro3 = Models.FromProximityId(0x2027);
             int candidates = 0;
             bool anyKnownHeader = false;
@@ -617,7 +628,7 @@ public sealed partial class NearbyService : IDisposable
                     continue;
                 }
                 candidates++;
-                bool valid = Proximity.TryReadCaseBroadcast(data, pair.EncCipher, out Battery reading, out bool knownHeader);
+                bool valid = Proximity.TryReadCaseBroadcast(data, pair.EncCipher, out PodBatteries reading, out bool knownHeader);
                 anyKnownHeader |= knownHeader;
                 if (!valid)
                 {
@@ -628,7 +639,7 @@ public sealed partial class NearbyService : IDisposable
                     return;
                 }
                 match = pair;
-                battery = reading;
+                batteries = reading;
             }
             if (match is null)
             {
@@ -639,18 +650,36 @@ public sealed partial class NearbyService : IDisposable
                 }
                 return;
             }
-            if (!match.DirectCaseSeen && battery.Percent is not null)
+            if (!match.DirectCaseSeen && (batteries.Case.Percent ?? batteries.Left.Percent ?? batteries.Right.Percent) is not null)
             {
                 match.DirectCaseSeen = true;
                 Log.Info("nearby", "received battery telemetry from a paired charging case");
             }
             match.CaseSignal = CaseSignal.Observe(match.CaseSignal, rssi, direct: true);
-            changed = battery.Percent is not null && StoreCaseReading(match, battery, direct: true);
+            changed = batteries.Case.Percent is not null && StoreCaseReading(match, batteries.Case, direct: true);
+            changed |= StoreCaseBudReading(match, batteries);
         }
         if (changed)
         {
             CaseBatteryChanged?.Invoke();
         }
+    }
+
+    // A valid report with empty slots removes the old readings immediately.
+    private static bool StoreCaseBudReading(Pair pair, PodBatteries batteries)
+    {
+        var previous = pair.CaseBudBroadcast;
+        if (batteries.Left.Percent is null && batteries.Right.Percent is null)
+        {
+            pair.CaseBudBroadcast = null;
+            return previous is not null;
+        }
+        pair.CaseBudBroadcast = new(batteries.Left, batteries.Right, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        long now = Environment.TickCount64;
+        if (previous is { } last && last.Left == batteries.Left && last.Right == batteries.Right && now - pair.LastCaseBudsPublished < 10_000)
+            return false;
+        pair.LastCaseBudsPublished = now;
+        return true;
     }
 
     // Under _lock. A missing battery never refreshes the timestamp of the previous value.
@@ -840,7 +869,7 @@ public sealed partial class NearbyService : IDisposable
     private async Task ObserveWindowsConnectAsync(Pair pair, int attempt, long deadline)
     {
         // Wait for the attach already triggered by the Windows link. This path never pages the AirPods.
-        bool attached = await WaitForAttachAsync(pair.Address, deadline).ConfigureAwait(false);
+        await WaitForReadyAsync(pair.Address, deadline).ConfigureAwait(false);
         lock (_lock)
         {
             if (!_pairs.TryGetValue(pair.Address, out Pair? current) || current != pair ||
@@ -849,7 +878,7 @@ public sealed partial class NearbyService : IDisposable
             {
                 return;
             }
-            if (attached && _connections.Session?.Address == pair.Address)
+            if (IsReady(pair.Address))
             {
                 pair.Offer = offer with { State = OfferState.Connected };
             }
@@ -862,6 +891,23 @@ public sealed partial class NearbyService : IDisposable
         }
         OffersChanged?.Invoke();
     }
+
+    // Windows can switch playback to this pair after the popup's initial wait has expired.
+    // Reconcile the idle offer when that connection actually becomes ready.
+    private void OnSessionReady(AapSession session) => ThreadPool.QueueUserWorkItem(_ =>
+    {
+        lock (_lock)
+        {
+            if (_disposed || _connections.Session != session || !IsReady(session.Address) ||
+                !_pairs.TryGetValue(session.Address, out Pair? pair) || pair.Reconnect.Held ||
+                pair.Offer is not { State: OfferState.Offer or OfferState.Failed } offer)
+                return;
+            pair.Offer = offer with { State = OfferState.Connected };
+            Log.Info("nearby", $"offer {Mac.Format(session.Address)} confirmed by ready session");
+            Publish();
+        }
+        OffersChanged?.Invoke();
+    });
 
     // Under _lock. A fresh manual offer makes sense only while the device is still nearby and available.
     private static void RestoreIdleOffer(Pair pair, NearbyOffer offer) =>
@@ -1000,14 +1046,17 @@ public sealed partial class NearbyService : IDisposable
         public int AutoConnectAttempt { get; set; }
         public NearbyOffer? Offer { get; set; }
         public CaseBroadcast? CaseBroadcast { get; set; }
+        public CaseBudBroadcast? CaseBudBroadcast { get; set; }
         public CaseSignal? CaseSignal { get; set; }
         public CaseSignal? InCaseSignal { get; set; }
         public bool DirectCaseSeen { get; set; }
         public long LastCaseReceived { get; set; }
         public long LastCasePublished { get; set; }
+        public long LastCaseBudsPublished { get; set; }
         public bool Nearby => Present && !LinkUp && !InClosedCase;
         /// <summary>Completed when the link comes up during a connect; cancelled to abandon the connect.</summary>
         public TaskCompletionSource? Link { get; set; }
+        public CancellationTokenSource? ConnectCancellation { get; set; }
 
         /// <summary>False when <paramref name="keys"/> is the instance already in use (SettingsStore replaces it on change).</summary>
         public bool SetKeys(ProximityKeys keys)
@@ -1019,6 +1068,7 @@ public sealed partial class NearbyService : IDisposable
             Dispose();
             _keys = keys;
             CaseBroadcast = null;
+            CaseBudBroadcast = null;
             CaseSignal = null;
             InCaseSignal = null;
             DirectCaseSeen = false;
@@ -1033,6 +1083,8 @@ public sealed partial class NearbyService : IDisposable
         {
             Link?.TrySetCanceled();
             Link = null;
+            ConnectCancellation?.Cancel();
+            ConnectCancellation = null;
         }
 
         public void Dispose()

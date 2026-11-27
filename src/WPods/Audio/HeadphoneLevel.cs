@@ -12,15 +12,25 @@ internal static class HeadphoneLevel
     private const uint Silent = 2;
     private const int WindowMs = 250;
     private const int RouteCheckMs = 5000;
-    private static readonly Guid FloatSubtype = new("00000003-0000-0010-8000-00AA00389B71");
     private static readonly Reading Waiting = new("waiting");
     private static readonly Reading Unsupported = new("unsupported");
 
     internal sealed record Reading(string Status, int? LeftDb = null, int? RightDb = null,
         int? VolumePercent = null, bool? Muted = null, string? OutputName = null, int? Stream = null,
-        long? ElapsedMs = null, double? SampleMs = null, double? MeasuredMs = null, double? ActiveMs = null, int? AverageDb = null, int? SignalDb = null);
+        long? ElapsedMs = null, double? SampleMs = null, double? MeasuredMs = null, double? ActiveMs = null, int? AverageDb = null, int? SignalDb = null)
+    {
+#if PARITY_OWNER_PREVIEW
+        internal string? AcousticStatus { get; init; }
+        internal double? LeftDba { get; init; }
+        internal double? RightDba { get; init; }
+#endif
+    }
 
-    internal static void Watch(ulong address, Func<bool> connected, Action<Reading> post, CancellationToken cancel)
+    internal static void Watch(ulong address, Func<bool> connected, Action<Reading> post, CancellationToken cancel
+#if PARITY_OWNER_PREVIEW
+        , AcousticCalibration? calibration = null
+#endif
+        )
     {
         int? lastFault = null;
         long start = Environment.TickCount64;
@@ -37,10 +47,14 @@ internal static class HeadphoneLevel
                 var enumerator = CreateEnumerator();
                 try
                 {
-                    int revision = DefaultOutputWatcher.EndpointRevision;
+                    int revision = DefaultOutputWatcher.MediaRevision;
                     string? endpoint = FindPairPlaybackEndpoint(enumerator, address);
                     if (endpoint is null) Publish(Waiting);
-                    else Capture(enumerator, endpoint, address, revision, start, ++stream, session, connected, Publish, cancel);
+                    else Capture(enumerator, endpoint, address, revision, start, ++stream, session, connected, Publish, cancel
+#if PARITY_OWNER_PREVIEW
+                        , calibration
+#endif
+                        );
                 }
                 finally { Marshal.ReleaseComObject(enumerator); }
                 lastFault = null;
@@ -61,7 +75,11 @@ internal static class HeadphoneLevel
     }
 
     private static unsafe void Capture(IMMDeviceEnumerator enumerator, string endpoint, ulong address, int revision,
-        long start, int stream, HeadphoneLevelSession session, Func<bool> connected, Action<Reading> post, CancellationToken cancel)
+        long start, int stream, HeadphoneLevelSession session, Func<bool> connected, Action<Reading> post, CancellationToken cancel
+#if PARITY_OWNER_PREVIEW
+        , AcousticCalibration? calibration
+#endif
+        )
     {
         using var ready = new AutoResetEvent(false);
         Marshal.ThrowExceptionForHR(enumerator.GetDevice(endpoint, out IMMDevice device));
@@ -90,6 +108,13 @@ internal static class HeadphoneLevel
                     post(Unsupported with { OutputName = outputName });
                     return;
                 }
+#if PARITY_OWNER_PREVIEW
+                if (calibration is not null && !calibration.MatchesRoute(endpoint, rate))
+                {
+                    post(Waiting with { OutputName = outputName, AcousticStatus = "route" });
+                    return;
+                }
+#endif
                 // Shared event-driven loopback is supported on Windows 10 version 1703 and newer.
                 Marshal.ThrowExceptionForHR(client.Initialize(0, Loopback | EventCallback, 0, 0, format, 0));
             }
@@ -108,14 +133,21 @@ internal static class HeadphoneLevel
             AWeightedRms meter = new(rate);
             WaitHandle[] signals = [cancel.WaitHandle, ready];
             long now = Environment.TickCount64;
-            long nextWindow = now + WindowMs;
+            int windowMs = WindowMs;
+#if PARITY_OWNER_PREVIEW
+            if (calibration is not null) windowMs = 1000;
+            BenchVolume? baseline = calibration is null ? null : ReadBenchVolume(volume);
+            bool gainChanged = false;
+            long nextGainCheck = now + 100;
+#endif
+            long nextWindow = now + windowMs;
             long nextRouteCheck = now + RouteCheckMs;
             while (!cancel.IsCancellationRequested && connected())
             {
                 int timeout = (int)Math.Max(0, nextWindow - Environment.TickCount64);
                 if (WaitHandle.WaitAny(signals, timeout) == 0 || !connected()) return;
                 now = Environment.TickCount64;
-                int currentRevision = DefaultOutputWatcher.EndpointRevision;
+                int currentRevision = DefaultOutputWatcher.MediaRevision;
                 if (now >= nextRouteCheck || revision != currentRevision)
                 {
                     revision = currentRevision;
@@ -143,6 +175,13 @@ internal static class HeadphoneLevel
                     }
                     finally { Marshal.ThrowExceptionForHR(capture.ReleaseBuffer(frames)); }
                 }
+#if PARITY_OWNER_PREVIEW
+                if (calibration is not null && now >= nextGainCheck)
+                {
+                    gainChanged |= ReadBenchVolume(volume) != baseline;
+                    nextGainCheck = now + 100;
+                }
+#endif
                 if (now >= nextWindow)
                 {
                     var (frames, left, right) = meter.Take();
@@ -153,9 +192,19 @@ internal static class HeadphoneLevel
                     int? percent = volume is not null && volume.GetMasterVolumeLevelScalar(out float level) >= 0 && float.IsFinite(level)
                         ? (int)Math.Round(Math.Clamp(level, 0, 1) * 100) : null;
                     bool? muted = volume is not null && volume.GetMute(out int isMuted) >= 0 ? isMuted != 0 : null;
-                    post(new Reading(frames == 0 ? "waiting" : "live", leftDb, rightDb, percent, muted, outputName, stream,
-                        frames == 0 ? null : now - start, seconds * 1000, SignalDb: frames == 0 ? null : HeadphoneLevelSession.StereoDb(left, right)));
-                    nextWindow = now + WindowMs;
+                    var reading = new Reading(frames == 0 ? "waiting" : "live", leftDb, rightDb, percent, muted, outputName, stream,
+                        frames == 0 ? null : now - start, seconds * 1000, SignalDb: frames == 0 ? null : HeadphoneLevelSession.StereoDb(left, right));
+#if PARITY_OWNER_PREVIEW
+                    if (calibration is not null)
+                    {
+                        var current = ReadBenchVolume(volume);
+                        reading = EstimateAcoustic(reading, calibration, current, !gainChanged && current == baseline, seconds, left, right);
+                        baseline = current;
+                        gainChanged = false;
+                    }
+#endif
+                    post(reading);
+                    nextWindow = now + windowMs;
                 }
             }
         }
@@ -169,20 +218,31 @@ internal static class HeadphoneLevel
         }
     }
 
-    private static int ReadStereoFloatRate(nint format)
+#if PARITY_OWNER_PREVIEW
+    private readonly record struct BenchVolume(AcousticCalibration.Gains Gain, bool Muted);
+
+    private static BenchVolume? ReadBenchVolume(IAudioEndpointVolume? volume)
     {
-        if (format == 0 || Marshal.ReadInt16(format, 2) != 2 || Marshal.ReadInt16(format, 12) != 8 ||
-            Marshal.ReadInt16(format, 14) != 32) return 0;
-        ushort tag = unchecked((ushort)Marshal.ReadInt16(format));
-        if (tag == 0xFFFE)
-        {
-            // WAVEFORMATEXTENSIBLE stores the front-left/right mask and the sample subtype.
-            if (Marshal.ReadInt16(format, 16) < 22 || Marshal.ReadInt16(format, 18) != 32 ||
-                Marshal.ReadInt32(format, 20) is not (0 or 3) ||
-                Marshal.PtrToStructure<Guid>(format + 24) != FloatSubtype) return 0;
-        }
-        else if (tag != 3) return 0;
-        int rate = Marshal.ReadInt32(format, 4);
-        return rate >= 44100 ? rate : 0;
+        if (volume is null || volume.GetChannelCount(out uint channels) < 0 || channels != 2 ||
+            volume.GetMasterVolumeLevel(out float master) < 0 ||
+            volume.GetChannelVolumeLevel(0, out float left) < 0 ||
+            volume.GetChannelVolumeLevel(1, out float right) < 0 || volume.GetMute(out int muted) < 0)
+            return null;
+        var gain = new AcousticCalibration.Gains(master, left, right);
+        return gain.IsFinite ? new BenchVolume(gain.Rounded(), muted != 0) : null;
     }
+
+    private static Reading EstimateAcoustic(Reading reading, AcousticCalibration calibration,
+        BenchVolume? volume, bool stable, double seconds, double left, double right)
+    {
+        if (volume is not { } state) return reading with { AcousticStatus = "volume" };
+        if (state.Muted) return reading with { AcousticStatus = "muted" };
+        if (!stable) return reading with { AcousticStatus = "gainChanged" };
+        if (seconds is < .9 or > 1.1 || (!double.IsFinite(left) && !double.IsFinite(right)))
+            return reading with { AcousticStatus = "signal" };
+        var estimate = calibration.Estimate(state.Gain, left, right);
+        return reading with { LeftDba = estimate.Left, RightDba = estimate.Right,
+            AcousticStatus = estimate.Left is null && estimate.Right is null ? "range" : "estimate" };
+    }
+#endif
 }

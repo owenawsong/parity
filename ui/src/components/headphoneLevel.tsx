@@ -93,6 +93,9 @@ export const createHeadphoneLevel = () => {
     const stale = samples.findIndex((sample) => sample.time >= start);
     if (stale < 0) {
       samples.length = 0;
+      clearInterval(timer);
+      timer = 0;
+      return;
     } else if (stale > 0) {
       samples.splice(0, stale);
     }
@@ -124,12 +127,12 @@ export const createHeadphoneLevel = () => {
   };
 
   const requestDraw = (): void => {
-    if (watchId && chartVisible && !document.hidden && !paintFrame)
+    if (watchId && chartVisible && !document.hidden && samples.length && !paintFrame)
       paintFrame = requestAnimationFrame(draw);
   };
 
   const syncDrawing = (): void => {
-    if (watchId && chartVisible && !document.hidden) {
+    if (watchId && chartVisible && !document.hidden && samples.length) {
       if (!timer) timer = window.setInterval(requestDraw, 250);
       requestDraw();
     } else {
@@ -146,6 +149,8 @@ export const createHeadphoneLevel = () => {
     samples.length = 0;
     timeOffset = null;
     syncDrawing();
+    const context = graph.getContext('2d');
+    context?.reset();
     store.headphoneLevel = null;
     if (id) post({ type: 'watchHeadphoneLevel', value: false, id, request });
   };
@@ -320,6 +325,7 @@ export const createHeadphoneLevel = () => {
         });
         // Capture can continue while the chart is scrolled away.
         while (samples.length && samples[0].time < next.elapsedMs - HISTORY_MS) samples.shift();
+        syncDrawing();
       }
     }
     paint(connectedId());

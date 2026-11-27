@@ -5,6 +5,7 @@ export function createSamplePlayer(paint: (fraction: number, seconds: number, pl
   let durationSeconds = 0;
   let context: AudioContext | undefined;
   let source: AudioBufferSourceNode | undefined;
+  let stereo: ChannelMergerNode | undefined;
   let origin = 0;
   let fraction = 0;
   let frame = 0;
@@ -24,6 +25,8 @@ export function createSamplePlayer(paint: (fraction: number, seconds: number, pl
   const pause = () => {
     version++;
     detach();
+    stereo?.disconnect();
+    stereo = undefined;
     if (context) void context.close().catch(() => {});
     context = undefined;
     draw();
@@ -33,7 +36,16 @@ export function createSamplePlayer(paint: (fraction: number, seconds: number, pl
     detach();
     source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    if (buffer.numberOfChannels === 1) {
+      if (!stereo) {
+        stereo = context.createChannelMerger(2);
+        stereo.connect(context.destination);
+      }
+      source.connect(stereo, 0, 0);
+      source.connect(stereo, 0, 1);
+    } else {
+      source.connect(context.destination);
+    }
     source.onended = () => {
       fraction = 1;
       pause();

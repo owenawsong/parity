@@ -5,6 +5,7 @@ import { type Busy, createBusy, NavRow } from '../components/common';
 import { createSegmented, type Segmented } from '../components/segmented';
 import { setAttr, setDisabled, setHidden, setText } from '../dom';
 import { post } from '../host';
+import { hardwareArt } from '../hardwareArt';
 import { labelsVersion, t, type LabelKey } from '../i18n';
 import { Art, Icon, type IconName } from '../icons';
 import type { HoldDuration, PressSpeed, StemMode } from '../protocol';
@@ -303,7 +304,7 @@ export const createControls = (ctx: Ctx): Page => {
     const notReady = !!st && !st.ready;
     if (drawnModel !== d.model + '/' + d.art) {
       drawnModel = d.model + '/' + d.art;
-      const poster = (d.model === 'AirPods Pro 3' && PRO3_HOME_ART?.right) || AIRPODS_HOME_POSTERS?.[d.model];
+      const poster = hardwareArt(d.model)?.right ?? AIRPODS_HOME_POSTERS?.[d.model];
       if (poster) {
         const image = document.createElement('img');
         image.src = poster;

@@ -54,7 +54,7 @@ def main():
             raise RuntimeError(result)
         print(f"{result}. {retained:g} additional DOM nodes after 1000 replaced translated rows.", flush=True)
         page.close()
-        for harness in ("test-output-route", "test-media-timeline"):
+        for harness in ("test-output-route", "test-media-timeline", "test-mic-signals", "test-mic-sample-player"):
             path = subprocess.check_output(["node", f"ui/tools/{harness}.mjs"], cwd=ROOT, text=True).strip()
             page = browser.new_page()
             page.goto(Path(path).as_uri())

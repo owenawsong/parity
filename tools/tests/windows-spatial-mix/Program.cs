@@ -62,6 +62,70 @@ if (args.Contains("--virtual-loopback"))
     Console.WriteLine($"Three independent playback processes reached one uninterrupted WASAPI loopback ({frames} non-silent frames). Windows defaults verified.");
     return;
 }
+if (args.Contains("--virtual-volume"))
+{
+    using var devices = new MMDeviceEnumerator();
+    using var sink = FindTestEndpoint(devices);
+    using var pair = devices.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+        .FirstOrDefault(d => d.FriendlyName.Equals("Dummy Output (Voicemod)", StringComparison.OrdinalIgnoreCase))
+        ?? throw new Exception("The second isolated virtual output is unavailable.");
+    Check(Process.GetProcessesByName("AudioRelay").Length == 0 && Process.GetProcessesByName("Voicemod").Length == 0,
+        "A virtual output is in use.");
+    string?[] defaults = Enumerable.Range(0, 3).Select(AudioEndpoints.DefaultPlaybackRole).ToArray();
+    foreach (var endpoint in new[] { sink, pair })
+    {
+        Check(defaults.All(id => !WindowsSpatialMix.Same(id, endpoint.ID)), "A test output is a Windows default.");
+        var sessions = endpoint.AudioSessionManager.Sessions;
+        for (int i = 0; i < sessions.Count; i++)
+        {
+            using var session = sessions[i];
+            Check(session.State != AudioSessionState.AudioSessionStateActive, "A render session is using a test output.");
+        }
+    }
+    // Separate wrappers let this harness generate external Windows notifications.
+    using var writeSink = devices.GetDevice(sink.ID);
+    using var writePair = devices.GetDevice(pair.ID);
+    var s = writeSink.AudioEndpointVolume;
+    var p = writePair.AudioEndpointVolume;
+    var oldSink = (s.MasterVolumeLevelScalar, s.Mute);
+    var oldPair = (p.MasterVolumeLevelScalar, p.Mute);
+    static bool Near(float a, float b) => Math.Abs(a - b) < .01f;
+    try
+    {
+        s.MasterVolumeLevelScalar = .30f;
+        p.MasterVolumeLevelScalar = .52f;
+        s.Mute = false;
+        p.Mute = true;
+        bool ownsRoute = true;
+        using var link = new SpatialVolumeLink(pair.AudioEndpointVolume, sink.AudioEndpointVolume, () => Volatile.Read(ref ownsRoute));
+        Check(Near(s.MasterVolumeLevelScalar, .52f) && s.Mute, "The Windows slider did not inherit the existing volume and mute.");
+        link.Start();
+        s.Mute = false;
+        foreach (float value in new[] { .48f, .44f, .40f }) s.MasterVolumeLevelScalar = value;
+        Check(SpinWait.SpinUntil(() => Near(p.MasterVolumeLevelScalar, .40f) && !p.Mute, 1500), "Volume and unmute did not reach output.");
+        p.MasterVolumeLevelScalar = .46f;
+        p.Mute = true;
+        Check(SpinWait.SpinUntil(() => Near(s.MasterVolumeLevelScalar, .46f) && s.Mute, 1500), "The output's volume and mute did not update Windows.");
+        Volatile.Write(ref ownsRoute, false);
+        s.MasterVolumeLevelScalar = .32f;
+        Thread.Sleep(120);
+        Check(Near(p.MasterVolumeLevelScalar, .46f) && p.Mute, "A stale route changed the output.");
+        link.Dispose();
+        Volatile.Write(ref ownsRoute, true);
+        s.MasterVolumeLevelScalar = .22f;
+        Thread.Sleep(120);
+        Check(Near(p.MasterVolumeLevelScalar, .46f), "Volume forwarding continued after restoring the route.");
+        Check(!link.Failed, "An endpoint volume write failed.");
+    }
+    finally
+    {
+        (s.MasterVolumeLevelScalar, s.Mute) = oldSink;
+        (p.MasterVolumeLevelScalar, p.Mute) = oldPair;
+    }
+    Check(defaults.SequenceEqual(Enumerable.Range(0, 3).Select(AudioEndpoints.DefaultPlaybackRole)), "The test changed a Windows default.");
+    Console.WriteLine("Initial volume, rapid slider changes, mute, reverse updates and teardown passed on two isolated Windows outputs.");
+    return;
+}
 var saved = new WindowsSpatialMix.Saved("virtual", "buds", "buds", "call");
 var queue = new SpatialPlaybackBuffer(100);
 static float[] Frames(float value, int count) => Enumerable.Range(0, count * 2).Select(i => i % 2 == 0 ? value : -value).ToArray();

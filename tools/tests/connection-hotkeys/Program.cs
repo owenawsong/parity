@@ -13,6 +13,20 @@ Check(ConnectionShortcut.Target(0, 1, [], [2, 1]) == 1, "A remembered offline pa
 Check(ConnectionShortcut.Target(0, 9, [], [2, 1]) == 2, "An unpaired device is skipped");
 Check(ConnectionShortcut.Target(0, 1, [3], [1, 3]) == 3, "Disconnect targets the pending pair before the previously used one");
 Check(ConnectionShortcut.Target(0, 0, [], []) == 0, "No paired AirPods yields no target");
+var timeline = new ConnectionTimeline();
+timeline.Record(1, ConnectionEvent.LinkUp);
+timeline.Record(1, ConnectionEvent.MotionMissing);
+timeline.Record(2, ConnectionEvent.ControlsReady);
+timeline.Record(1, ConnectionEvent.MotionMissing);
+timeline.Record(1, ConnectionEvent.CalibrationTimedOut);
+var events = timeline.Read(1);
+Check(events.Length == 3 && events[0].Kind == ConnectionEvent.CalibrationTimedOut &&
+    events[1].Kind == ConnectionEvent.MotionMissing && events[1].Count == 2 && events[2].Kind == ConnectionEvent.LinkUp,
+    "Connection history groups repeated failures for the selected pair and preserves milestone order");
+Check(timeline.Read(2).Single().Kind == ConnectionEvent.ControlsReady && timeline.Read(0).Length == 0 &&
+    events.All(entry => entry.AgeSeconds >= 0), "Connection history isolates pairs and returns relative event ages");
+for (int i = 0; i < 100; i++) timeline.Record(1, i % 2 == 0 ? ConnectionEvent.LinkUp : ConnectionEvent.LinkDown);
+Check(timeline.Read(1).Length == 8 && timeline.Read(2).Length == 0, "Connection history bounds storage and the displayed result");
 Check(ConnectionShortcut.Resolve(on, false, false) == ConnectionIntent.Connect, "Connect works while offline");
 Check(ConnectionShortcut.Resolve(on, true, false) == ConnectionIntent.AlreadyConnected, "A second connect is idempotent");
 Check(ConnectionShortcut.Resolve(off, false, false) == ConnectionIntent.AlreadyDisconnected, "A second disconnect is idempotent");

@@ -111,8 +111,8 @@ internal sealed class PulseFeed : IDisposable
         <title>Parity Pulse</title>
         <style>
           body{margin:0;background:transparent;color:#fff;font:600 22px system-ui,sans-serif}
-          #pulse{display:inline-flex;align-items:baseline;gap:8px;padding:8px 15px;border-radius:16px;background:#151517ed}
-          #pulse[hidden]{display:none} b{font-size:38px;font-variant-numeric:tabular-nums} span{color:#ff9db5}
+          div#pulse{display:inline-flex;align-items:baseline;gap:8px;padding:8px 15px;border-radius:16px;background:#151517ed}
+          div#pulse[hidden]{display:none} b{font-size:38px;font-variant-numeric:tabular-nums} span{color:#ff9db5}
         </style>
         <div id="pulse" hidden><b id="bpm"></b><span>BPM</span></div>
         <script src="overlay.js" defer></script>

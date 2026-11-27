@@ -18,6 +18,7 @@ type View = Offer['state'] | 'none' | 'multi';
 let ready = false;
 let visible = false;
 let separateBatteries = false;
+let maxFinishes: Record<string, string> = {};
 let offers: Offer[] = [];
 let view: View = 'none';
 let dev: Offer | null = null;
@@ -138,7 +139,7 @@ const render = (): void => {
   }
   const name = dev.name.trim() || dev.model || t('home.yourAirPods');
   setAttr(card, 'aria-label', view === 'offer' ? t('popup.nearbyA11y', { name }) : name);
-  offerView.render(dev, visible, separateBatteries);
+  offerView.render(dev, visible, separateBatteries, false, maxFinishes[dev.id]);
   if (visible && focusedList && showOffer) {
     (offerView.connect.hidden ? offerView.secondary : offerView.connect).focus();
   }
@@ -160,6 +161,7 @@ const onMessage = (msg: HostToPopup): void => {
   switch (msg.type) {
     case 'init':
       separateBatteries = msg.popupSeparateBatteries === true;
+      maxFinishes = msg.maxFinishes ?? {};
       visible = msg.visible;
       if (!visible) clearConfirmation();
       setOffers(msg.offers);
@@ -167,6 +169,7 @@ const onMessage = (msg: HostToPopup): void => {
       break;
     case 'prefs':
       if (msg.popupSeparateBatteries !== undefined) separateBatteries = msg.popupSeparateBatteries;
+      if (msg.maxFinishes) maxFinishes = msg.maxFinishes;
       break;
     case 'offers':
       setOffers(msg.offers);

@@ -26,6 +26,7 @@ assert.deepEqual(pairTimeToLow(normal,shorter),shorter);
 assert.deepEqual(pairTimeToLow(shorter,normal),shorter);
 assert.equal(pairTimeToLow(normal,forecast(points,'right',now+11*60000)),null);
 assert.equal(pairTimeToLow(normal,forecast(points.map(p=>({...p,source:'nearby'})),'right',now)),null);
+assert.equal(forecast(points.map(p=>({...p,source:'case'})),'right',now),null);
 assert.ok(forecast(points,'left',now+9*60000).low <= normal.low);
 console.log('PASS individual and paired discharge forecasts, freshness, source and uncertainty checks');
 const recharge = points.map((p,i)=>({...p, charging:i===6}));

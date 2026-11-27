@@ -138,7 +138,7 @@
   --dur-slow: 280ms;
   --dur-spin: 800ms;
   --dur-toast: 4000ms;
-  --dur-popup-confirm: 2500ms;
+  --dur-popup-confirm: 1450ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0, 0, 0, 1);
   --font-text:

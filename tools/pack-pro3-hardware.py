@@ -6,7 +6,10 @@ from PIL import Image
 
 source, output = map(Path, sys.argv[1:])
 output.mkdir(parents=True, exist_ok=True)
-for part in ("left", "right", "case", "case-charging"):
+parts = ("headphone",) if (source / "headphone.png").is_file() else ("left", "right", "case")
+if (source / "case-charging.png").is_file():
+    parts += ("case-charging",)
+for part in parts:
     with Image.open(source / (part + ".png")) as image:
         rgba = image.convert("RGBA")
         bounds = rgba.getchannel("A").point(lambda value: 255 if value >= 4 else 0).getbbox()

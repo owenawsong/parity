@@ -5,7 +5,7 @@ import { post } from '../host';
 import { t } from '../i18n';
 import { Icon, Spinner } from '../icons';
 import { capsOf, current, effectiveMode, live, store } from '../state';
-import type { MicMode, MicSide } from '../protocol';
+import type { MicCheck, MicMode, MicSide } from '../protocol';
 import { enhancementName } from './enhancement';
 import { createProcessingModels } from './micModes';
 import type { Ctx, Page } from './page';
@@ -41,6 +41,10 @@ export const createMicSetup = (ctx: Ctx): Page => {
   };
   let privacy!: HTMLButtonElement;
   let playbackOutput!: HTMLParagraphElement;
+  let sampleOutputRow!: HTMLLabelElement;
+  let sampleOutput!: HTMLSelectElement;
+  let sampleEndpoint = '';
+  let sampleOutputKey = '';
   const testRole = (): 'airpods' | 'calls' => {
     const setup = store.micSetup;
     return setup?.callsId && setup.callsId !== setup.targetId && (!setup.targetId || sourceRole === 'calls') ? 'calls' : 'airpods';
@@ -83,22 +87,83 @@ export const createMicSetup = (ctx: Ctx): Page => {
   let seek!: HTMLInputElement;
   let playhead!: HTMLSpanElement;
   let samplePlot!: HTMLDivElement;
-  let idleHint!: HTMLSpanElement;
+  let sampleSummary!: HTMLSpanElement;
   let captureAnnouncement!: HTMLSpanElement;
   let playbackError = false;
+  let nativeRequest = 0;
+  let nativeRevision = 0;
+  let nativePosition = 0;
+  let nativePlaying = false;
+  let nativeSeeking = false;
+  let nativeFrame = 0;
+  let nativeReportAt = 0;
+  let nativeReportPosition = 0;
   let previousTarget: string | null = null;
   let drawnEnvelope: number[] | undefined;
   const bars = Array.from({ length: 32 }, () => document.createElement('i'));
   let inputFill!: HTMLSpanElement;
-  const player = createSamplePlayer((fraction, seconds, playing) => {
-    seek.value = String(Math.round(fraction * 1000));
+  const paintPlayback = (fraction: number, seconds: number, playing: boolean) => {
+    const step = String(Math.round(fraction * 1000));
+    if (seek.value !== step) seek.value = step;
     setAttr(seek, 'aria-valuetext', t('mic.sampleTime', { seconds: seconds.toFixed(1) }));
-    playhead.style.left = `${fraction * 100}%`;
+    playhead.style.transform = `translate3d(${fraction * 100}%, 0, 0)`;
     setText(play, t(playing ? 'mic.pauseSample' : 'mic.playSample'));
-  }, () => {
+  };
+  const player = createSamplePlayer(paintPlayback, () => {
     playbackError = true;
     setText(checkStatus, t('mic.checkPlayFailed'));
   });
+  const hasSample = (check: MicCheck | null) => !!(check?.sample || check?.wave);
+  const paintNative = (duration = store.micCheck?.durationMs ?? 0): void => {
+    paintPlayback(duration ? nativePosition / duration : 0, nativePosition / 1000, nativePlaying);
+  };
+  const stopNativeClock = (): void => {
+    cancelAnimationFrame(nativeFrame);
+    nativeFrame = nativeReportAt = 0;
+  };
+  const tickNative = (now: number): void => {
+    nativeFrame = 0;
+    if (!pageActive || !nativePlaying || nativeSeeking || !nativeReportAt) return;
+    const duration = store.micCheck?.durationMs ?? 0;
+    const elapsed = Math.max(0, Math.min(250, now - nativeReportAt));
+    const position = Math.min(duration, Math.max(nativePosition, nativeReportPosition + elapsed));
+    if (position !== nativePosition) {
+      nativePosition = position;
+      paintNative(duration);
+    }
+    if (position < duration && elapsed < 250) nativeFrame = requestAnimationFrame(tickNative);
+  };
+  const setNativePlayback = (playing: boolean, position: number): void => {
+    if (!nativeRequest) return;
+    stopNativeClock();
+    nativePlaying = playing;
+    nativePosition = Math.round(position);
+    nativeSeeking = false;
+    post({ type: 'setMicSamplePlayback', request: nativeRequest, value: ++nativeRevision,
+      name: playing ? 'play' : 'pause', positionMs: nativePosition, id: playing && sampleEndpoint ? sampleEndpoint : undefined });
+    paintNative();
+  };
+  const renderNativePlayback = (): void => {
+    const progress = store.micSamplePlayback;
+    if (!pageActive || !progress || progress.request !== nativeRequest || progress.revision !== nativeRevision) return;
+    nativePlaying = progress.playing;
+    if (!nativeSeeking) {
+      if (progress.playing) {
+        if (!nativeReportAt) nativePosition = progress.positionMs;
+        nativeReportPosition = progress.positionMs;
+        nativeReportAt = performance.now();
+        if (!nativeFrame) nativeFrame = requestAnimationFrame(tickNative);
+      } else {
+        stopNativeClock();
+        nativePosition = progress.positionMs;
+        paintNative();
+      }
+    }
+    if (progress.failed) {
+      playbackError = true;
+      render();
+    }
+  };
 
   let settingsMode!: HTMLDivElement;
   let settingsSide!: HTMLLabelElement;
@@ -122,12 +187,14 @@ export const createMicSetup = (ctx: Ctx): Page => {
     const device = current();
     const state = device && live(device);
     setText(enhancementValue, enhancementName(store.micConfig.enhancement));
-    const stereoMic = device?.stereoMicSupported !== false;
-    setHidden(settingsMode, !device || !stereoMic || store.micEnabled.size < 2);
+    const stereoMic = !!device && device.stereoMicSupported !== false;
+    const hasMicSide = !!device && capsOf(device).has('micSide');
+    setHidden(optionsSection, !stereoMic && !hasMicSide);
+    setHidden(settingsMode, !stereoMic || store.micEnabled.size < 2);
     setHidden(enhancement, !stereoMic);
     setHidden(models, !stereoMic);
     if (stereoMic && models.open) processingModels.render();
-    setHidden(settingsSide, !device || !capsOf(device).has('micSide'));
+    setHidden(settingsSide, !hasMicSide);
     if (!device) return;
     for (const mode of modes) modeChoice.showItem(mode, store.micEnabled.has(mode));
     modeChoice.lock(!state);
@@ -147,11 +214,12 @@ export const createMicSetup = (ctx: Ctx): Page => {
           <div class="wp-mic-test-head">
             <div class="wp-mic-source__name">
               <h2 id="micCheckTitle" l:text="mic.sourceLabel" />
-              <strong ref={sourceName} />
+              <span ref={sourceName} />
             </div>
             <label class="wp-mic-source-picker" ref={sourceSelector} hidden>
               <span class="wp-sr" l:text="mic.testSource" />
               <select ref={sourceChoice} onchange={() => {
+                if (nativePlaying) setNativePlayback(false, nativePosition);
                 sourceRole = sourceChoice.value === 'calls' ? 'calls' : 'airpods';
                 store.micCheck = null;
                 player.setSample(undefined);
@@ -174,7 +242,15 @@ export const createMicSetup = (ctx: Ctx): Page => {
                 <div class="wp-mic-check__wave" aria-hidden="true" ref={checkWave} />
                 <span class="wp-sample-playhead" ref={playhead} hidden aria-hidden="true" />
                 <input class="wp-sample-seek" type="range" min="0" max="1000" step="10" value="0" hidden
-                  l:aria-label="mic.seekSample" ref={seek} oninput={() => player.seek(Number(seek.value) / 1000)} />
+                  l:aria-label="mic.seekSample" ref={seek} oninput={() => {
+                    const fraction = Number(seek.value) / 1000;
+                    if (!nativeRequest) { player.seek(fraction); return; }
+                    nativeSeeking = true;
+                    nativePosition = (store.micCheck?.durationMs ?? 0) * fraction;
+                    paintNative();
+                  }} onchange={() => {
+                    if (nativeRequest && nativeSeeking) setNativePlayback(nativePlaying, nativePosition);
+                  }} />
               </div>
               <div class="wp-scope-time" aria-hidden="true"><span>0:00</span><span ref={sampleLength} /></div>
             </div>
@@ -182,14 +258,17 @@ export const createMicSetup = (ctx: Ctx): Page => {
           <div class="wp-mic-transport">
             <div class="wp-mic-transport__status">
               <span class="wp-mic-recording-time" ref={elapsed} aria-hidden="true" hidden />
-              <span l:text="mic.testHint" ref={idleHint} />
+              <span class="wp-mic-sample-summary" ref={sampleSummary} hidden />
               <span class="wp-sr" role="status" ref={captureAnnouncement} />
             </div>
             <div class="wp-mic-check__actions">
               <button type="button" class="wp-btn wp-btn--primary wp-mic-replay" ref={play} l:text="mic.playSample" onclick={() => {
                 playbackError = false;
                 render();
-                void player.toggle();
+                if (nativeRequest) {
+                  const duration = store.micCheck?.durationMs ?? 0;
+                  setNativePlayback(!nativePlaying, !nativePlaying && nativePosition >= duration ? 0 : nativePosition);
+                } else void player.toggle();
               }} hidden />
               <button type="button" class="wp-btn wp-btn--primary" ref={record} onclick={() => {
                 const check = store.micCheck;
@@ -211,6 +290,15 @@ export const createMicSetup = (ctx: Ctx): Page => {
               }} />
             </div>
           </div>
+          <label class="wp-mic-sample-output" ref={sampleOutputRow} hidden>
+            <span l:text="mic.sampleOutput" />
+            <select ref={sampleOutput} onchange={() => {
+              if (nativePlaying) setNativePlayback(false, nativePosition);
+              sampleEndpoint = sampleOutput.value;
+              playbackError = false;
+              render();
+            }} />
+          </label>
           <p class="wp-row__desc" ref={playbackOutput} hidden />
           <div class="wp-mic-sample-footer">
             <p class="wp-mic-check__status" role="status" ref={checkStatus} />
@@ -247,9 +335,9 @@ export const createMicSetup = (ctx: Ctx): Page => {
           </button>
         </div>
       </section>
-      <section class="wp-group" aria-labelledby="micToolsHeading">
+      <section class="wp-group wp-mic-tools-group" aria-labelledby="micToolsHeading">
         <h2 id="micToolsHeading" class="wp-group__title" l:text="mic.tools" />
-        <div class="wp-mic-tools wp-mic-listen">
+        <div class="wp-mic-tools wp-mic-listen wp-hairline-group">
           <details class="wp-tool-details" ref={models} ontoggle={() => {
             if (pageActive && models.open) processingModels.render();
           }}>
@@ -353,6 +441,27 @@ export const createMicSetup = (ctx: Ctx): Page => {
     }
   };
 
+  const renderLevels = (): void => {
+    if (!pageActive || !store.windowVisible) return;
+    const setup = store.micSetup;
+    const id = sourceId();
+    const state = store.micCheck?.status;
+    const capturing = state === 'recording' || state === 'finishing';
+    const level = !id ? null : capturing ? setup?.captureDb :
+      id === setup?.targetId && id !== setup.callsId ? setup.targetDb : setup?.callsDb;
+    if (!signalGroup.hidden) paintMeter(level ?? null, value, meter, null,
+      t(!setup ? 'common.checking' : id ? 'mic.idle' : 'mic.noSignal'));
+    if (capturing) {
+      const ms = Math.max(0, Math.min(120000, setup?.capturedMs ?? 0));
+      const warmingUp = ms === 0 && state === 'recording';
+      setText(elapsed, warmingUp ? t('mic.sampleStarting') : clock(ms));
+      setText(captureAnnouncement, t(warmingUp ? 'mic.sampleStarting' : state === 'recording' ? 'mic.check.recording' : 'mic.check.finishing'));
+    } else {
+      setText(captureAnnouncement, '');
+    }
+    if (!listenMeterGroup.hidden) paintMeter(setup?.listenDb ?? null, listenMeterValue, listenMeter, listenSegments, t('mic.noSignal'));
+  };
+
   const render = (): void => {
     if (!pageActive) return;
     if (!store.windowVisible) {
@@ -379,7 +488,8 @@ export const createMicSetup = (ctx: Ctx): Page => {
     const testingAirPods = role === 'airpods';
     const paired = !!id && id === setup?.targetId;
     const muted = !!id && (testingAirPods ? setup?.targetMuted : setup?.callsMuted);
-    setText(sourceName, testingAirPods ? current()?.name || t('mic.airPodsSource') : setup?.callsInput ?? fallback);
+    const recordingPair = store.attached === null ? null : store.byId.get(store.attached);
+    setText(sourceName, testingAirPods ? recordingPair?.name || t('mic.airPodsSource') : setup?.callsInput ?? fallback);
     setText(targetName, setup?.target ?? (setup ? t('mic.noAirPodsInput') : fallback));
     setText(input, setup?.input ?? fallback);
     setText(calls, setup?.callsInput ?? fallback);
@@ -403,7 +513,8 @@ export const createMicSetup = (ctx: Ctx): Page => {
     }
     setText(routing, setup?.fault ? t('mic.routeFault', { code: setup.fault }) : !setup ? fallback : !setup.target ? t('mic.routeUnavailable') :
       setup.defaultInput && setup.defaultCalls ? t('mic.routeSelected') : t('mic.routeChoose'));
-    if (previousTarget && id !== previousTarget && store.micCheck?.wave) {
+    if (previousTarget && id !== previousTarget && hasSample(store.micCheck)) {
+      if (nativePlaying) setNativePlayback(false, nativePosition);
       store.micCheck = null;
       playbackError = false;
     }
@@ -418,25 +529,47 @@ export const createMicSetup = (ctx: Ctx): Page => {
     sourceChoice.disabled = busy;
     airpodsChoice.disabled = !setup?.targetId;
     callsChoice.disabled = !setup?.callsId;
-    const level = !id ? null : captureActive ? setup?.captureDb :
-      paired && id !== setup?.callsId ? setup?.targetDb : setup?.callsDb;
-    const levelHint = setup ? id ? 'mic.idle' : 'mic.noSignal' : 'common.checking';
     setText(signalLabel, t(setup && !id ? testingAirPods ? 'mic.noAirPodsInput' : 'mic.noCallInput' : 'mic.testLevel'));
-    paintMeter(level ?? null, value, meter, null, t(levelHint));
-    const ms = Math.max(0, Math.min(120000, setup?.capturedMs ?? 0));
-    setText(elapsed, clock(ms));
     setText(sampleLength, clock(check?.durationMs ?? 0));
     setHidden(elapsed, !captureActive);
-    setText(captureAnnouncement, captureActive ? t(recording ? 'mic.check.recording' : 'mic.check.finishing') : '');
-    const playable = !!check?.wave && check.endpoint === id;
-    setHidden(idleHint, captureActive || playable || !id || !!muted || state !== 'idle');
+    const playable = hasSample(check) && check?.endpoint === id;
+    setHidden(sampleSummary, !playable);
+    setText(sampleSummary, playable ? t('mic.sampleSummary', { time: clock(check?.durationMs ?? 0) }) : '');
     setHidden(signalGroup, playable);
-    player.setSample(playable ? check.wave : undefined, check?.durationMs);
+    player.setSample(playable ? check?.wave : undefined, check?.durationMs);
+    const request = playable && check?.sample ? check.request : 0;
+    if (nativeRequest !== request) {
+      stopNativeClock();
+      nativeRequest = request;
+      nativePosition = 0;
+      nativePlaying = nativeSeeking = false;
+      if (nativeRequest) paintNative(check?.durationMs);
+    }
+    const sampleOutputs = setup?.sampleOutputs ?? [];
+    const missingOutput = !!sampleEndpoint && !sampleOutputs.some(device => device.id === sampleEndpoint);
+    const showOutputPicker = !!nativeRequest && (sampleOutputs.length > 0 || missingOutput);
+    setHidden(sampleOutputRow, !showOutputPicker);
+    if (showOutputPicker) {
+      const defaultName = setup?.output ? t('mic.playbackDefault', { name: setup.output }) : t('mic.sampleOutputDefault');
+      const outputKey = JSON.stringify([defaultName, sampleOutputs, missingOutput ? sampleEndpoint : '']);
+      if (outputKey !== sampleOutputKey) {
+        sampleOutputKey = outputKey;
+        sampleOutput.replaceChildren(new Option(defaultName, ''), ...sampleOutputs.map(device => new Option(device.name, device.id)));
+        if (missingOutput) {
+          const unavailable = new Option(t('mic.sampleOutputUnavailable'), sampleEndpoint);
+          unavailable.disabled = true;
+          sampleOutput.add(unavailable);
+        }
+      }
+      sampleOutput.value = sampleEndpoint;
+      if (missingOutput && nativePlaying) setNativePlayback(false, nativePosition);
+    }
     setHidden(seek, !playable);
     setHidden(playhead, !playable);
     setHidden(samplePlot, !playable);
-    setClass(record, 'wp-btn--primary', !playable);
-    setClass(record, 'wp-btn--secondary', playable);
+    setClass(record, 'wp-btn--primary', !playable && !captureActive);
+    setClass(record, 'wp-btn--secondary', captureActive);
+    setClass(record, 'wp-btn--subtle', playable);
     setAttr(checkCard, 'data-check', state);
     setAttr(checkCard, 'data-capturing', captureActive ? 'true' : null);
     const statusText = playbackError ? 'mic.checkPlayFailed' :
@@ -445,18 +578,18 @@ export const createMicSetup = (ctx: Ctx): Page => {
     setText(checkStatus, paired && setup?.fault && state === 'idle' ? t('mic.routeFault', { code: setup.fault }) :
       setup?.monitoring && state === 'idle' ? t('mic.check.busy') : t(statusText, { peak: check?.peakDb ?? 0 }));
     setHidden(checkStatus, !setup || captureActive || (playable && !playbackError && state === 'ready') || (state === 'idle' && !playbackError && !muted && !(paired && setup?.fault) && !setup?.monitoring));
-    setText(record, t(recording ? 'mic.finishSample' : finishing ? 'mic.finishingSample' : check?.wave ? 'mic.recordAgain' : 'mic.recordSample'));
+    setText(record, t(recording ? 'mic.finishSample' : finishing ? 'mic.finishingSample' : playable ? 'mic.recordAgain' : 'mic.recordSample'));
     setAttr(record, 'aria-disabled', finishing ? 'true' : null);
     setDisabled(record, !captureActive && (!id || busy || !!muted));
     setHidden(fixInput, !(id && muted) && !['muted', 'failed', 'noFrames', 'routeSilent', 'silent'].includes(state));
     setHidden(privacy, state !== 'denied');
-    const outputOnPair = store.playbackOutput?.id === current()?.id && store.playbackOutput?.defaultOutput?.onPair === true;
-    setHidden(playbackOutput, !playable || !setup?.output || outputOnPair || setup.output === current()?.name);
+    const outputOnPair = store.playbackOutput?.id === recordingPair?.id && store.playbackOutput?.defaultOutput?.onPair === true;
+    setHidden(playbackOutput, showOutputPicker || !playable || !setup?.output || outputOnPair || setup.output === recordingPair?.name);
     if (playable && setup?.output) setText(playbackOutput, t('mic.playbackDefault', { name: setup.output }));
     setHidden(play, !playable);
-    setDisabled(play, !!setup?.monitoring);
-    if (playable && check.envelope !== drawnEnvelope) {
-      drawnEnvelope = check.envelope;
+    setDisabled(play, !!setup?.monitoring || (!!nativeRequest && missingOutput));
+    if (playable && check?.envelope !== drawnEnvelope) {
+      drawnEnvelope = check?.envelope;
       bars.forEach((bar, i) => {
         const db = drawnEnvelope?.[i] ?? -60;
         bar.style.setProperty('--bar', `${Math.max(2, (db + 60) * .58)}px`);
@@ -464,7 +597,7 @@ export const createMicSetup = (ctx: Ctx): Page => {
     }
 
     const sources = setup?.sources ?? [];
-    const stereoMic = current()?.stereoMicSupported !== false;
+    const stereoMic = !!recordingPair && recordingPair.stereoMicSupported !== false;
     const key = JSON.stringify([stereoMic, sources]);
     if (key !== sourcesKey) {
       sourcesKey = key;
@@ -480,8 +613,7 @@ export const createMicSetup = (ctx: Ctx): Page => {
     const starting = setup?.listenStatus === 'starting';
     setHidden(monitorIndicator, !listening || starting);
     setHidden(listenMeterGroup, !listening || starting);
-    if (listening) paintMeter(setup?.listenDb ?? null, listenMeterValue, listenMeter, listenSegments, t('mic.noSignal'));
-    else cancelVolume();
+    if (!listening) cancelVolume();
     if (setup?.monitoring) monitorSource.value = setup.monitoring;
     setAttr(monitorButton, 'aria-pressed', String(listening));
     setText(monitorButton, t(listening ? 'mic.listenStop' : 'mic.listenStart'));
@@ -493,18 +625,22 @@ export const createMicSetup = (ctx: Ctx): Page => {
       setup.listenStatus === 'waiting' ? 'mic.listenWaiting' : setup.listenStatus === 'unavailable' ? 'mic.listenFailed' :
       monitorSource.value === 'parity:earbud-microphone' ? 'mic.listenEarbudDesc' : 'mic.listenDesc';
     setText(monitorStatus, t(description));
+    renderLevels();
   };
 
   return {
-    el, anchors: { check: checkCard, options: optionsSection, models, listen: listenSection }, sections: { micSetup: render, mic: renderSettings },
+    el, anchors: { check: checkCard, options: optionsSection, models, listen: listenSection },
+    sections: { micSetup: render, micSignal: renderLevels, micSample: renderNativePlayback, mic: renderSettings },
     returnFocus: from => from === 'enhancement' ? enhancement : null,
     enter: () => {
       pageActive = true;
       sourceRole = 'airpods';
       previousTarget = null;
       drawnEnvelope = undefined;
+      sampleEndpoint = '';
       store.micSetup = null;
       store.micCheck = null;
+      store.micSamplePlayback = null;
       playbackError = false;
     },
     leave: () => {
@@ -514,6 +650,10 @@ export const createMicSetup = (ctx: Ctx): Page => {
       cancelVolume();
       player.setSample(undefined);
       store.micCheck = null;
+      store.micSamplePlayback = null;
+      nativeRequest = 0;
+      nativePlaying = nativeSeeking = false;
+      stopNativeClock();
       post({ type: 'watchMicSetup', value: false, request: 0 });
     },
   };

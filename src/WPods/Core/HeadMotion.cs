@@ -4,9 +4,12 @@ using System.Numerics;
 namespace WPods.Core;
 
 /// <summary>Recognizes a deliberate departure from neutral and return, during a short manual test.</summary>
-internal sealed class HeadMotion(bool spatial = false)
+internal sealed class HeadMotion(bool spatial = false, bool invertPracticePitch = false)
 {
     private const int GestureCalibrationSamples = 12;
+    // Some AirPods deliver motion at 5 Hz even after a faster stream was
+    // requested. Accept two coherent reports at that cadence with BLE jitter.
+    private const int SpatialCenterGapMs = 320;
     private int _count;
     private double _pitchNeutral;
     private double _yawNeutral;
@@ -48,7 +51,7 @@ internal sealed class HeadMotion(bool spatial = false)
     internal int Gestures => _gestures;
     internal long LastSample => _lastSample;
     // Positive detector pitch means raising the chin relative to its starting position.
-    internal int GesturePitchUp => (int)Math.Clamp(Math.Round(_pitch), -25, 25);
+    internal int GesturePitchUp => (int)Math.Clamp(Math.Round(invertPracticePitch ? -_pitch : _pitch), -25, 25);
     internal int Yaw => (int)Math.Clamp(Math.Round(_yaw), -25, 25);
 
     // SensorDataWX. The protobuf sequence number can change the envelope size.
@@ -167,7 +170,7 @@ internal sealed class HeadMotion(bool spatial = false)
             // The packet contains a fused attitude. Two coherent reports establish a
             // fresh forward direction even if the listener is already turning.
             long separation = now - _anchorAt;
-            if (_count == 1 || separation < 0 || separation > 160)
+            if (_count == 1 || separation < 0 || separation > SpatialCenterGapMs)
             {
                 _neutral = attitude;
                 _anchorAt = now;
@@ -243,6 +246,14 @@ internal sealed class HeadMotion(bool spatial = false)
         _gestureScale = scale;
         // Never finish a gesture begun under a previous threshold.
         _axis = null;
+        _awaitNeutral = Calibrated;
+    }
+
+    internal void ResetGesture()
+    {
+        _lastGesture = _axis = null;
+        _gestures = 0;
+        _cooldown = 0;
         _awaitNeutral = Calibrated;
     }
 

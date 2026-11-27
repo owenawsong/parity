@@ -246,6 +246,7 @@ public sealed class DeviceState
     public string? Name { get; internal set; }
     public string? ModelNumber { get; internal set; }
     public string? ModelName { get; internal set; }
+    public string? FirmwareBuild { get; internal set; }
 
     public Battery LeftBattery => _batteries[Left];
     public Battery RightBattery => _batteries[Right];

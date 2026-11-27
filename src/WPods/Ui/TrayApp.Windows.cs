@@ -130,7 +130,11 @@ internal sealed partial class TrayApp
         window.Resize += (_, _) =>
         {
             UpdateMicSetupWatch();
-            if (window.WindowState == FormWindowState.Minimized) StopHeadphoneLevel();
+            if (window.WindowState == FormWindowState.Minimized)
+            {
+                StopHeadphoneLevel();
+                DiscardOnboardEqPreviews();
+            }
             UpdateCaseFinderWatch();
             UpdateNowPlayingWatch();
         };
@@ -175,6 +179,7 @@ internal sealed partial class TrayApp
         PostVisibility(window.Pane, false);
         StopHeadphoneLevel();
         _mainShown = false;
+        DiscardOnboardEqPreviews();
         UpdateNowPlayingWatch();
         StopWindowMotion();
         UpdateMicSetupWatch();
@@ -221,6 +226,7 @@ internal sealed partial class TrayApp
         StopHeadphoneLevel();
         _main = null;
         _mainShown = false;
+        DiscardOnboardEqPreviews();
         UpdateNowPlayingWatch();
         StopWindowMotion();
         _mainInitSent = false;
@@ -353,7 +359,7 @@ internal sealed partial class TrayApp
         {
             w.WriteNull("selected");
         }
-        MessageWriter.WriteState(w, _session?.State);
+        MessageWriter.WriteState(w, _session);
         w.WriteString("mic", MessageWriter.Camel(_micStatus));
         MessageWriter.WriteMicCatalog(w);
         MessageWriter.WriteMicConfig(w, "micConfig", _settings.Mic);
@@ -386,7 +392,7 @@ internal sealed partial class TrayApp
         SendBatteryHistory();
         SendSpotify();
 #endif
-        SendMainDeltas(Dirty.Devices | Dirty.Session | Dirty.Mic | Dirty.Mixer, _session?.State);
+        SendMainDeltas(Dirty.Devices | Dirty.Session | Dirty.Mic | Dirty.Mixer, _session);
         ReplayPlaybackGestures();
         SendStartupPref();
         SendUpdate();
@@ -451,6 +457,14 @@ internal sealed partial class TrayApp
         w.WriteStartArray("autoConnectDevices");
         foreach (string id in _prefs.AutoConnectDevices) w.WriteStringValue(id);
         w.WriteEndArray();
+        WriteMaxFinishes(w);
+    }
+
+    private void WriteMaxFinishes(Utf8JsonWriter w)
+    {
+        w.WriteStartObject("maxFinishes");
+        foreach (var (id, finish) in _prefs.MaxFinishes) w.WriteString(id, finish);
+        w.WriteEndObject();
     }
 
     private void SendLayoutPrefs()
@@ -747,6 +761,7 @@ internal sealed partial class TrayApp
         w.WriteString("theme", _prefs.Theme);
         w.WriteBoolean("useAccent", _prefs.UseAccent);
         w.WriteBoolean("popupSeparateBatteries", _prefs.PopupSeparateBatteries);
+        WriteMaxFinishes(w);
         string json = _writer.End();
         _popup?.Pane.Post(json);
         _osd?.Pane.Post(json);

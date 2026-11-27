@@ -14,7 +14,8 @@ internal sealed class SpotifyBridge : IDisposable
     private readonly MMDevice _sink, _airpods;
     private readonly Loopback _capture;
     private readonly WasapiOut _output;
-    private readonly SpatialFeed _feed = new();
+    private readonly SpatialVolumeLink? _volume;
+    private readonly SpatialFeed _feed;
     private long _lastSignal;
     private long _levelTime;
     private int _levels;
@@ -51,11 +52,14 @@ internal sealed class SpotifyBridge : IDisposable
     // The UI and playback diagnostics read these across COM apartments.
     internal string SinkId { get; }
     internal string PairId { get; }
-    internal bool Failed => _failed;
+    internal bool Failed => _failed || _volume?.Failed == true;
     internal bool HasSignal => _lastSignal != 0 && Environment.TickCount64 - Interlocked.Read(ref _lastSignal) < 1800;
     internal void Pose(double yaw, double pitch = 0, double roll = 0) => _feed.Dsp.Pose(yaw, pitch, roll);
     internal void SetSpeakerAngle(int degrees) => _feed.Dsp.SetSpeakerAngle(degrees);
     internal void SetLevel(string? level) => _feed.Dsp.SetLevel(level);
+    internal void SetSpatial(bool enabled) => _feed.SetSpatial(enabled);
+    internal void SetEqCurve(int[] curve) => _feed.Equalizer.SetCurve(curve);
+    internal void SetEqMode(bool enabled, bool flat) => _feed.Equalizer.SetMode(enabled, flat);
     internal void TestSpeakers() => _feed.Check.Start();
 
     private sealed class Loopback(MMDevice source) : WasapiCapture(source, true, 24)
@@ -63,19 +67,44 @@ internal sealed class SpotifyBridge : IDisposable
         protected override AudioClientStreamFlags GetAudioClientStreamFlags() =>
             base.GetAudioClientStreamFlags() | AudioClientStreamFlags.Loopback;
     }
-    private sealed class SpatialFeed : IWaveProvider
+    private sealed class SpatialFeed(bool spatial) : IWaveProvider
     {
         internal readonly SpatialPlaybackBuffer Buffer = new(SpatialStereo.Rate / 10);
         internal readonly SpatialStereo Dsp = new();
         internal readonly SpeakerCheck Check = new();
+        internal readonly PcEqualizer Equalizer = new();
+        private bool _spatial = spatial;
+        private float _mix = spatial ? 1 : 0;
+        internal void SetSpatial(bool enabled) => Volatile.Write(ref _spatial, enabled);
         public WaveFormat WaveFormat => Format;
         public int Read(byte[] bytes, int offset, int count)
         {
             var audio = bytes.AsSpan(offset, count);
             var samples = MemoryMarshal.Cast<byte, float>(audio);
             Buffer.Read(samples);
+            Equalizer.Process(samples);
             Check.Mix(samples);
-            Dsp.Process(audio);
+            bool effect = Volatile.Read(ref _spatial);
+            if (effect && _mix == 1) Dsp.Process(audio);
+            else if (effect || _mix > 0)
+            {
+                Span<float> dry = stackalloc float[512];
+                for (int position = 0; position < samples.Length; position += dry.Length)
+                {
+                    var block = samples.Slice(position, Math.Min(dry.Length, samples.Length - position));
+                    if (!effect && _mix == 0) break;
+                    if (effect && _mix == 1) { Dsp.Process(MemoryMarshal.AsBytes(block)); continue; }
+                    block.CopyTo(dry);
+                    Dsp.Process(MemoryMarshal.AsBytes(block));
+                    float step = (effect ? 1f : -1f) / (SpatialStereo.Rate / 50);
+                    for (int i = 0; i + 1 < block.Length; i += 2)
+                    {
+                        _mix = Math.Clamp(_mix + step, 0, 1);
+                        block[i] = float.Lerp(dry[i], block[i], _mix);
+                        block[i + 1] = float.Lerp(dry[i + 1], block[i + 1], _mix);
+                    }
+                }
+            }
             return count;
         }
     }
@@ -171,9 +200,10 @@ internal sealed class SpotifyBridge : IDisposable
     }
 
     internal SpotifyBridge(SpatialApp app, string airpodsId, ulong address, Func<bool>? stillAvailable = null,
-        RouteBeforeSpatial? expected = null)
+        RouteBeforeSpatial? expected = null, Func<bool>? canLinkVolume = null, bool spatial = true)
     {
         App = app;
+        _feed = new SpatialFeed(spatial);
         try
         {
             _airpods = _devices.GetDevice(airpodsId);
@@ -199,8 +229,15 @@ internal sealed class SpotifyBridge : IDisposable
             if (stillAvailable?.Invoke() == false) throw new InvalidOperationException("unavailable");
             if (App.IsWindowsMix)
             {
+                // AudioRelay's loopback is upstream of its master volume. Seed its
+                // slider from the AirPods, then send slider changes to the real output.
+                _volume = new SpatialVolumeLink(_airpods.AudioEndpointVolume, _sink.AudioEndpointVolume,
+                    () => canLinkVolume?.Invoke() != false && !_failed &&
+                        WindowsSpatialMix.Same(AudioEndpoints.DefaultPlaybackRole(1), SinkId) &&
+                        !WindowsSpatialMix.Same(AudioEndpoints.DefaultPlaybackRole(2), SinkId));
                 OriginalRoute = new(PairId, WindowsSpatialMix.Start(SinkId, PairId, expected?.Mix), null);
                 _mixOwnsDefault = true;
+                _volume.Start();
             }
             else
             {
@@ -228,7 +265,7 @@ internal sealed class SpotifyBridge : IDisposable
     {
         foreach (var d in devices.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            if (d.FriendlyName.Contains("Virtual Speakers for AudioRelay", StringComparison.OrdinalIgnoreCase)) return d;
+            if (AudioEndpoints.IsSpatialVirtualOutput(d.FriendlyName)) return d;
             d.Dispose();
         }
         return null;
@@ -306,6 +343,7 @@ internal sealed class SpotifyBridge : IDisposable
     public void Dispose()
     {
         AudioEndpoints.SpotifyRoute = null;
+        _volume?.Dispose();
         // Restore the app path independently of capture / render teardown.
         try
         {

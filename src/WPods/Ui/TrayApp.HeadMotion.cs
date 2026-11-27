@@ -24,13 +24,17 @@ internal sealed partial class TrayApp
     private CancellationTokenSource? _headAction;
     private Task _motionStop = Task.CompletedTask;
 
-    private sealed class HeadMotionTest(AapSession session, bool playback, int spatialRequest)
+    private sealed class HeadMotionTest(AapSession session, bool playback, int spatialRequest, bool pro3)
     {
         internal readonly AapSession Session = session;
         internal readonly long Started = Environment.TickCount64;
-        internal readonly HeadMotion Motion = new(spatialRequest > 0);
+        // Pro 3's gesture axes use the opposite vertical sign. Keep the wire
+        // and UI contract chin-up positive, and leave spatial rendering alone.
+        internal readonly HeadMotion Motion = new(spatialRequest > 0, invertPracticePitch: pro3);
         internal readonly int SpatialRequest = spatialRequest;
         internal readonly bool Playback = playback;
+        internal long PracticeStarted;
+        internal bool Practicing => PracticeStarted != 0;
         internal Task<bool> Write = Task.FromResult(true);
         internal bool AlternateFirst;
         internal bool TriedBoth;
@@ -113,9 +117,15 @@ internal sealed partial class TrayApp
             PostHeadMotion(address, "stopped", 0, null);
             return;
         }
-        if (playback && SpotifyOwnsMotion)
+        if (spatialRequest == 0 && SpotifyOwnsMotion)
         {
             PostHeadMotion(address, "spatialBusy", 0, null);
+            return;
+        }
+        if (!playback && spatialRequest == 0 && _headMotionTest is { Playback: true } shortcuts &&
+            shortcuts.Session.Address == address)
+        {
+            SetShortcutPractice(shortcuts, true);
             return;
         }
         if (_headMotionTest is not null || _stoppingHeadMotion || (spatialRequest != SpotifyMotionRequest && (!MainLive || _main?.WindowState == FormWindowState.Minimized)) ||
@@ -130,10 +140,11 @@ internal sealed partial class TrayApp
             return;
         }
 
-        var test = new HeadMotionTest(session, playback, spatialRequest)
+        bool pro3 = Models.FromModelNumber(session.State.ModelNumber)?.Name == "AirPods Pro 3";
+        var test = new HeadMotionTest(session, playback, spatialRequest, pro3)
         {
-            AlternateFirst = HeadMotion.UseAlternateFirst(session.VerifiedMotionService,
-                Models.FromModelNumber(session.State.ModelNumber)?.Name == "AirPods Pro 3")
+            AlternateFirst = HeadMotion.UseAlternateFirst(session.VerifiedMotionService, pro3),
+            PracticeStarted = !playback && spatialRequest == 0 ? Environment.TickCount64 : 0,
         };
         if (spatialRequest == 0) test.Motion.SetGestureSensitivity(_prefs.GestureSensitivity);
 #if PAIRSIDE_LIVE
@@ -161,7 +172,12 @@ internal sealed partial class TrayApp
                 test.SpatialRequest > 0 ? "unavailable" : "stopped");
             return;
         }
-        if (test.Playback && !CanUsePlaybackGesture(test.Session))
+        if (test.Playback && test.Practicing && (!MainLive || _main?.WindowState == FormWindowState.Minimized ||
+            Environment.TickCount64 - test.PracticeStarted >= 30_000))
+        {
+            SetShortcutPractice(test, false);
+        }
+        if (test.Playback && !test.Practicing && !CanUsePlaybackGesture(test.Session))
         {
             StopHeadMotion();
             return;
@@ -196,7 +212,7 @@ internal sealed partial class TrayApp
         bool newGesture = count > test.Count;
         bool moved = pitch != test.Pitch || yaw != test.Yaw;
         (test.Count, test.Pitch, test.Yaw, test.Gesture) = (count, pitch, yaw, gesture);
-        if (test.Playback && newGesture)
+        if (test.Playback && !test.Practicing && newGesture)
         {
             test.MediaResult = null;
             var binding = gesture switch { "nod" => _prefs.NodAction, "shake" => _prefs.ShakeAction, _ => "none" };
@@ -227,16 +243,42 @@ internal sealed partial class TrayApp
         bool changedStatus = status != test.Status;
         if (!changedStatus && samples == test.Samples) return;
         (test.Status, test.Samples) = (status, samples);
-        if (test.Playback && !changedStatus && !newGesture) return;
+        if (test.Playback && !test.Practicing && !changedStatus && !newGesture) return;
         if (test.SpatialRequest > 0)
         {
+#if PAIRSIDE_LIVE
+            if (test.SpatialRequest == SpotifyMotionRequest) UpdateSpatialMotionPollRate();
+#endif
             if (changedStatus && calibrated)
+            {
+                if (test.SpatialRequest == SpotifyMotionRequest)
+                    _connections.Timeline.Record(test.Session.Address, ConnectionEvent.TrackingReady);
                 Log.Info("aap", $"Spatial tracking ready: first frame {firstSample - test.Started} ms, ready {elapsed} ms, service {test.Session.VerifiedMotionService}");
+            }
             PostSpatialPose(test.Session.Address, test.SpatialRequest, status, spatialYaw, spatialPitch, spatialRoll);
             return;
         }
-        if (!test.Playback && !changedStatus && !newGesture && !moved) return;
-        PostHeadMotion(test.Session.Address, status, samples, gesture, test.Playback, count, pitch, yaw, test.MediaResult);
+        if (!changedStatus && !newGesture && !moved) return;
+        PostHeadMotion(test.Session.Address, status, samples, gesture, test.Playback, count, pitch, yaw,
+            test.MediaResult, test.Practicing);
+    }
+
+    private void SetShortcutPractice(HeadMotionTest test, bool enabled)
+    {
+        test.PracticeStarted = enabled ? Environment.TickCount64 : 0;
+        _headAction?.Cancel();
+        lock (test.Motion) test.Motion.ResetGesture();
+        (test.Count, test.Gesture, test.MediaResult) = (0, null, null);
+        _headMotionTimer.Interval = enabled ? 40 : 125;
+        PostHeadMotion(test.Session.Address, string.IsNullOrEmpty(test.Status) ? "waiting" : test.Status,
+            Math.Max(0, test.Samples), null, true, pitch: test.Pitch, yaw: test.Yaw, practicing: enabled);
+    }
+
+    private void StopGesturePractice()
+    {
+        if (_headMotionTest is { Playback: true, Practicing: true } shortcuts)
+            SetShortcutPractice(shortcuts, false);
+        else StopHeadMotion();
     }
 
     private void StopSpatialMotion(ulong address, int request)
@@ -264,7 +306,16 @@ internal sealed partial class TrayApp
         _stoppingHeadMotion = true;
         _headMotionTimer.Stop();
         test.Session.PacketReceived -= test.Observe;
-        lock (test.Motion) test.AudioPose = null;
+        int frames;
+        long firstFrame;
+        long lastFrame;
+        lock (test.Motion)
+        {
+            test.AudioPose = null;
+            frames = test.Motion.Samples;
+            firstFrame = test.FirstFrameAt;
+            lastFrame = test.Motion.LastSample;
+        }
         try
         {
             await test.Write;
@@ -281,7 +332,15 @@ internal sealed partial class TrayApp
         {
             _stoppingHeadMotion = false;
         }
-        Log.Info("aap", $"head motion test {status}: {Math.Max(0, test.Samples)} frames");
+        string timing = frames > 1 ? $", mean interval {(lastFrame - firstFrame) / (double)(frames - 1):F0} ms" : "";
+        Log.Info("aap", $"head motion test {status}: {frames} frames{timing}");
+        if (test.SpatialRequest == SpotifyMotionRequest)
+        {
+            if (status == "noSignal")
+                _connections.Timeline.Record(test.Session.Address, frames == 0 ? ConnectionEvent.MotionMissing : ConnectionEvent.CalibrationTimedOut);
+            else if (status == "signalLost")
+                _connections.Timeline.Record(test.Session.Address, ConnectionEvent.MotionInterrupted);
+        }
         if (test.SpatialRequest > 0) PostSpatialPose(test.Session.Address, test.SpatialRequest, status);
         else PostHeadMotion(test.Session.Address, status, Math.Max(0, test.Samples), test.Gesture, test.Playback, test.Count);
         if (_queuedSpatial is { } queued)
@@ -338,7 +397,7 @@ internal sealed partial class TrayApp
     {
         if (_headMotionTest is { Playback: true } test)
             PostHeadMotion(test.Session.Address, string.IsNullOrEmpty(test.Status) ? "waiting" : test.Status, test.Samples, test.Gesture, true, test.Count,
-                test.Pitch, test.Yaw, test.MediaResult);
+                test.Pitch, test.Yaw, test.MediaResult, test.Practicing);
         else if (_connections.Session is { } session)
             PostHeadMotion(session.Address, "stopped", 0, null);
     }
@@ -348,16 +407,13 @@ internal sealed partial class TrayApp
 #if PAIRSIDE_LIVE
         try
         {
-            if (!CanUsePlaybackGesture(session) ||
-                await Task.Run(() => DefaultOutputWatcher.wpn_audio_is_default_output(session.Address), ct) != 1)
-            {
-                return "noPlayback";
-            }
+            if (!CanUsePlaybackGesture(session)) return "noPlayback";
             GlobalSystemMediaTransportControlsSessionManager manager =
                 await GlobalSystemMediaTransportControlsSessionManager.RequestAsync().AsTask(ct);
-            var player = manager.GetCurrentSession();
+            int revision = DefaultOutputWatcher.MediaRevision;
+            var player = await Task.Run(() => EarMediaTransport.SelectPlayer(session.Address, manager.GetSessions(), allowPaused: true), ct);
             ct.ThrowIfCancellationRequested();
-            if (player is null || !CanUsePlaybackGesture(session)) return "noPlayback";
+            if (player is null || revision != DefaultOutputWatcher.MediaRevision || !CanUsePlaybackGesture(session)) return "noPlayback";
             var info = player.GetPlaybackInfo();
             if (info is null) return "noPlayback";
             switch (binding)
@@ -376,7 +432,7 @@ internal sealed partial class TrayApp
                     return "actionUnavailable";
             }
         }
-        catch (Exception e) when (e is COMException or InvalidOperationException or UnauthorizedAccessException)
+        catch (Exception e) when (e is COMException or InvalidCastException or InvalidOperationException or UnauthorizedAccessException)
         {
             Log.Warn("aap", $"head gesture media control failed: {e.Message}");
             return "noPlayback";
@@ -413,7 +469,7 @@ internal sealed partial class TrayApp
     }
 
     private void PostHeadMotion(ulong address, string status, int samples, string? gesture,
-        bool playback = false, int count = 0, int pitch = 0, int yaw = 0, string? mediaResult = null)
+        bool playback = false, int count = 0, int pitch = 0, int yaw = 0, string? mediaResult = null, bool practicing = false)
     {
         if (!MainLive || _main is not { } main) return;
         var w = _writer.Begin("headMotion");
@@ -422,6 +478,7 @@ internal sealed partial class TrayApp
         w.WriteNumber("samples", samples);
         w.WriteString("gesture", gesture);
         w.WriteBoolean("playback", playback);
+        w.WriteBoolean("practicing", practicing);
         w.WriteString("mediaResult", mediaResult);
         w.WriteNumber("count", count);
         w.WriteNumber("pitch", pitch);

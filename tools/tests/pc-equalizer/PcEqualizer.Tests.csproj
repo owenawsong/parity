@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <DefineConstants>PAIRSIDE_LIVE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/WPods/Audio/PcEqualizer.cs" />
+    <Compile Include="../../../src/WPods/Audio/Dsp/Biquad.cs" />
+    <Compile Include="../../../src/WPods/Audio/StereoLevelMatch.cs" />
+  </ItemGroup>
+</Project>

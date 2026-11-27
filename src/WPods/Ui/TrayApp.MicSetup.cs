@@ -37,10 +37,15 @@ internal sealed partial class TrayApp
         internal int CheckRequest;
         internal AapSession? CheckSession;
         internal int CheckPeak = -1;
+        internal MicCheck.Recording? Sample;
+        internal bool SampleUsedParityMic;
+        internal readonly MicSampleOutput.PlaybackOwner SamplePlayer = new();
+        internal Task SamplePlayback = Task.CompletedTask;
         internal volatile bool FinishSample;
         internal MicSetupStatus? Previous;
         internal IReadOnlyList<MixerDevice>? DeviceList;
         internal MixerDevice[] Sources = [];
+        internal MixerDevice[] SampleOutputs = [];
         internal AudioEndpoints.MicrophoneUse[] AppInputs = [];
 
         internal void StopCheck(string reason)
@@ -76,11 +81,13 @@ internal sealed partial class TrayApp
         }
     }
 
+    private readonly record struct MicLevels(int? Calls, int? Target, int? Monitor, int? Capture, int CapturedMs);
+
     private sealed record MicSetupStatus(string? Input, string? CallsInput, string? Output, string? Target,
-        string? CallsId, string? TargetId, bool DefaultInput, bool DefaultCalls, bool CallsMuted, int? VoiceDb,
-        int? CallsDb, int? TargetDb, bool TargetMuted, int CapturedMs, int? CaptureDb, bool SettingDefault, string? RouteError, string? Fault,
-        MixerDevice[] Sources, string? Monitoring, bool CanMonitor, int? ListenDb, string? ListenStatus,
-        string? CallsOutput, AudioEndpoints.MicrophoneUse[] AppInputs);
+        string? CallsId, string? TargetId, bool DefaultInput, bool DefaultCalls, bool CallsMuted,
+        bool TargetMuted, bool SettingDefault, string? RouteError, string? Fault,
+        MixerDevice[] Sources, string? Monitoring, bool CanMonitor, string? ListenStatus, MicLevels Levels,
+        string? CallsOutput, AudioEndpoints.MicrophoneUse[] AppInputs, MixerDevice[] SampleOutputs);
 
     private void UpdateMicSetupWatch()
     {
@@ -95,6 +102,7 @@ internal sealed partial class TrayApp
             _mic.Written -= old.Observe;
             _micSetupWatch = null;
             old.Check?.Cancel();
+            old.SamplePlayer.Cancel();
             old.ListenMeter?.Dispose();
             old.CallsMeter?.Dispose();
             old.TargetMeter?.Dispose();
@@ -125,6 +133,8 @@ internal sealed partial class TrayApp
         {
             if (address != watch.Address)
             {
+                watch.Sample = null;
+                watch.SamplePlayer.Cancel();
                 watch.RouteError = null;
                 watch.Routes = null;
                 watch.Target = null;
@@ -153,6 +163,7 @@ internal sealed partial class TrayApp
             watch.DeviceList = devices;
             watch.Sources = devices.Where(static d => d.Flow == MixerFlow.Input && d.State == MixerState.Active &&
                 d.Pair == 0 && !d.OwnMic).ToArray();
+            watch.SampleOutputs = devices.Where(IsActiveSampleOutput).ToArray();
         }
         bool canMonitor = session?.State.Status == SessionStatus.Ready && !session.CallAudio && !_mic.HandsFreeInUse;
         if (!canMonitor) _mixer.StopMonitor();
@@ -187,16 +198,28 @@ internal sealed partial class TrayApp
             watch.TargetMeter?.Dispose();
             watch.TargetMeter = separateTarget is null ? null : new ListenInputMeter(separateTarget);
         }
+        var levels = new MicLevels(watch.CallsMeter?.Level,
+            target is null ? null : separateTarget is null ? watch.CallsMeter?.Level : watch.TargetMeter?.Level,
+            monitoring == Mixer.EarbudMic ? db : watch.ListenMeter?.Level,
+            watch.Check is null ? null : Volatile.Read(ref watch.CaptureDb), Volatile.Read(ref watch.CapturedMs));
         var status = new MicSetupStatus(routes?.Input?.Name, routes?.CommunicationsInput?.Name, routes?.Output?.Name,
             target?.Name, callsId, target?.Id, target is not null && target.Id == routes?.Input?.Id,
-            defaultCalls, routes?.CommunicationsInput?.Muted == true, db, watch.CallsMeter?.Level,
-            separateTarget is null ? watch.CallsMeter?.Level : watch.TargetMeter?.Level, watch.TargetMuted == true,
-            Volatile.Read(ref watch.CapturedMs), watch.Check is null ? null : Volatile.Read(ref watch.CaptureDb),
+            defaultCalls, routes?.CommunicationsInput?.Muted == true, watch.TargetMuted == true,
             watch.SettingDefault, watch.RouteError, target?.OwnMic == true ? _mic.FaultCode : null,
-            watch.Sources, monitoring, canMonitor, monitoring == Mixer.EarbudMic ? db : watch.ListenMeter?.Level, monitorStatus,
-            routes?.CommunicationsOutput?.Name, watch.AppInputs);
+            watch.Sources, monitoring, canMonitor, monitorStatus, levels,
+            routes?.CommunicationsOutput?.Name, watch.AppInputs, watch.SampleOutputs);
         if (watch.Previous == status)
         {
+            return;
+        }
+        // The meter changes much more often than the routes or app list.
+        if (watch.Previous is { } previous && (previous with { Levels = levels }) == status)
+        {
+            var signal = _writer.Begin("micSignal");
+            signal.WriteNumber("watchRequest", watch.Request);
+            WriteMicLevels(signal, levels);
+            main.Pane.Post(_writer.End());
+            watch.Previous = status;
             return;
         }
         var w = _writer.Begin("micSetup");
@@ -222,10 +245,7 @@ internal sealed partial class TrayApp
         w.WriteString("targetId", status.TargetId);
         w.WriteBoolean("settingDefault", status.SettingDefault);
         w.WriteString("routeError", status.RouteError);
-        w.WriteNumber("capturedMs", status.CapturedMs);
-        if (status.CaptureDb is int recorded) w.WriteNumber("captureDb", recorded);
-        if (status.CallsDb is int callPeak) w.WriteNumber("callsDb", callPeak);
-        if (status.TargetDb is int targetPeak && target is not null) w.WriteNumber("targetDb", targetPeak);
+        WriteMicLevels(w, levels);
         w.WriteBoolean("targetMuted", status.TargetMuted);
         w.WriteBoolean("defaultInput", status.DefaultInput);
         w.WriteBoolean("defaultCalls", status.DefaultCalls);
@@ -233,8 +253,6 @@ internal sealed partial class TrayApp
         w.WriteBoolean("canMonitor", status.CanMonitor);
         w.WriteString("monitoring", status.Monitoring);
         w.WriteString("listenStatus", status.ListenStatus);
-        if (status.ListenDb is int level) w.WriteNumber("listenDb", level);
-        else w.WriteNull("listenDb");
         w.WriteStartArray("sources");
         foreach (MixerDevice source in status.Sources)
         {
@@ -244,10 +262,30 @@ internal sealed partial class TrayApp
             w.WriteEndObject();
         }
         w.WriteEndArray();
-        if (db is int voice) w.WriteNumber("peakDb", voice);
-        else w.WriteNull("peakDb");
+        w.WriteStartArray("sampleOutputs");
+        foreach (MixerDevice endpoint in status.SampleOutputs)
+        {
+            w.WriteStartObject();
+            w.WriteString("id", endpoint.Id);
+            w.WriteString("name", endpoint.Name);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
         main.Pane.Post(_writer.End());
         watch.Previous = status;
+    }
+
+    private static void WriteMicLevels(System.Text.Json.Utf8JsonWriter writer, MicLevels levels)
+    {
+        writer.WriteNumber("capturedMs", levels.CapturedMs);
+        if (levels.Calls is int calls) writer.WriteNumber("callsDb", calls);
+        else writer.WriteNull("callsDb");
+        if (levels.Target is int target) writer.WriteNumber("targetDb", target);
+        else writer.WriteNull("targetDb");
+        if (levels.Monitor is int monitor) writer.WriteNumber("listenDb", monitor);
+        else writer.WriteNull("listenDb");
+        if (levels.Capture is int capture) writer.WriteNumber("captureDb", capture);
+        else writer.WriteNull("captureDb");
     }
 
     private void SetListenMonitor(string? source, int percent)
@@ -270,6 +308,7 @@ internal sealed partial class TrayApp
     {
         watch.ReadingNames = true;
         bool pinChanged = false;
+        bool lookupFailed = false;
         int revision = watch.Revision;
         bool IsCurrent() => watch == _micSetupWatch && (_connections.Session?.Address ?? 0) == address &&
             revision == DefaultOutputWatcher.EndpointRevision;
@@ -288,7 +327,7 @@ internal sealed partial class TrayApp
                 bool? muted = target is null ? null : target.Id == calls?.Id ? calls.Muted : AudioEndpoints.ReadInputMute(target.Id);
                 AudioEndpoints.MicrophoneUse[] appInputs;
                 try { appInputs = AudioEndpoints.ActiveMicrophones(); }
-                catch (COMException) { appInputs = []; }
+                catch (Exception e) when (e is COMException or InvalidCastException) { appInputs = []; }
                 return (routes, target, muted, appInputs);
             });
             pinChanged = PinnedInput() != pinned;
@@ -298,13 +337,10 @@ internal sealed partial class TrayApp
                 if (!watch.AppInputs.SequenceEqual(snapshot.appInputs)) watch.AppInputs = snapshot.appInputs;
             }
         }
-        catch (COMException)
+        catch (Exception e) when (e is COMException or InvalidCastException or UnauthorizedAccessException)
         {
-            // The audio service can restart or an endpoint can disappear during the lookup.
-            watch.Routes = null;
-            watch.Target = null;
-            watch.TargetMuted = null;
-            watch.AppInputs = [];
+            // Keep this watch's last snapshot through a transient audio service restart.
+            lookupFailed = true;
         }
         finally
         {
@@ -312,7 +348,7 @@ internal sealed partial class TrayApp
                 (watch.Target is { } target && watch.Routes?.CommunicationsInput?.Id == target.Id);
             bool watchingCall = pairInput && (_mic.Capturing || _mic.HandsFreeInUse);
             watch.RefreshAfter = pinChanged || !IsCurrent() ? 0 :
-                Environment.TickCount64 + (watchingCall || watch.Check is not null ? 750 : watch.Target is null || watch.AppInputs.Length > 0 ? 1200 : 3500);
+                Environment.TickCount64 + (lookupFailed || watchingCall || watch.Check is not null ? 750 : watch.Target is null || watch.AppInputs.Length > 0 ? 1200 : 3500);
             watch.ReadingNames = false;
         }
     }
@@ -323,21 +359,25 @@ internal sealed partial class TrayApp
         if (address == 0) return null;
         var inputs = devices.Where(d => d.Flow == MixerFlow.Input && d.State == MixerState.Active &&
             (!d.OwnMic || stereoMic) && (d.Pair == address || (d.OwnMic && isVirtualPair(d.Id, address)))).ToArray();
-        return inputs.FirstOrDefault(d => d.Id == pinned) ?? inputs.FirstOrDefault(d => d.Id == callsId) ??
-            inputs.FirstOrDefault(d => d.OwnMic) ?? inputs.FirstOrDefault();
+        // The AirPods sample should use the Parity input when it is available.
+        // The separate Windows-call test opens the exact communications default.
+        return inputs.FirstOrDefault(d => d.Id == pinned) ?? inputs.FirstOrDefault(d => d.OwnMic) ??
+            inputs.FirstOrDefault(d => d.Id == callsId) ?? inputs.FirstOrDefault();
     }
 
     private async void UseAirPodsForCalls(string endpoint)
     {
         if (_micSetupWatch is not { SettingDefault: false, Check: null } watch ||
             _connections.Session is not { State.Status: SessionStatus.Ready } session ||
-            watch.Address != session.Address || watch.Target?.Id != endpoint) return;
+            watch.Address != session.Address || watch.Target?.Id != endpoint || watch.Routes is not { } routes) return;
         watch.SettingDefault = true;
         watch.RouteError = null;
         OnMicSetupTick(null, EventArgs.Empty);
         try
         {
-            bool applied = await Task.Run(() => AudioEndpoints.SetPairCallsInput(endpoint, session.Address));
+            string? original = routes.CommunicationsInput?.Id;
+            bool applied = await Task.Run(() => AudioEndpoints.SetPairCallsInput(endpoint, session.Address, original,
+                () => _connections.Session == session && session.State.Status == SessionStatus.Ready));
             if (!applied) watch.RouteError = "failed";
         }
         catch (Exception e) when (e is COMException or UnauthorizedAccessException or InvalidCastException)
@@ -373,8 +413,12 @@ internal sealed partial class TrayApp
         string? targetId = watch.Target?.Id;
         bool pairInput = endpoint is not null && endpoint == targetId;
         bool callsDefault = source == "calls";
+        bool parityInput = pairInput && watch.Target?.OwnMic == true;
+        bool pairCallInput = callsDefault && !parityInput && (watch.Routes?.HardwareCallInput == true ||
+            (watch.Address != 0 && watch.DeviceList?.Any(d => d.Id == endpoint && d.Pair == watch.Address && !d.OwnMic) == true));
+        bool recordingPair = pairInput || pairCallInput;
         if (endpoint is null || (!callsDefault && !pairInput) || (callsDefault && endpoint != watch.Routes?.CommunicationsInput?.Id) ||
-            (pairInput && (session?.State.Status != SessionStatus.Ready || session.Address != watch.Address)))
+            (recordingPair && (session?.State.Status != SessionStatus.Ready || session.Address != watch.Address)))
         {
             Reply(callsDefault && endpoint is not null ? "inputChanged" : "unavailable");
             return;
@@ -391,9 +435,13 @@ internal sealed partial class TrayApp
             return;
         }
         using var cancel = new CancellationTokenSource();
+        watch.Sample = null;
+        watch.SamplePlayer.Cancel();
+        Task previousPlayback = watch.SamplePlayback;
+        Func<bool>? inputReady = parityInput && !_mic.Capturing ? () => Volatile.Read(ref watch.CheckPeak) >= 0 : null;
         Interlocked.Exchange(ref watch.CheckPeak, -1);
         watch.TestingCallsDefault = callsDefault;
-        watch.TestingHardwareMic = pairInput && watch.Target?.OwnMic == false;
+        watch.TestingHardwareMic = recordingPair && !parityInput;
         watch.CheckStopReason = "idle";
         watch.CheckEndpoint = endpoint;
         watch.FinishSample = false;
@@ -401,23 +449,27 @@ internal sealed partial class TrayApp
         watch.CheckRequest = request;
         watch.CapturedMs = 0;
         watch.CaptureDb = -60;
-        watch.CheckSession = pairInput ? session : null;
+        watch.CheckSession = recordingPair ? session : null;
         watch.RefreshAfter = 0;
         Reply("recording");
         try
         {
+            await previousPlayback;
             MicCheck.Recording recorded = await Task.Run(() => MicCheck.Capture(endpoint, callsDefault, cancel.Token, (ms, db) =>
             {
                 Volatile.Write(ref watch.CapturedMs, ms);
                 Volatile.Write(ref watch.CaptureDb, db);
-            }, () => watch.FinishSample));
+            }, () => watch.FinishSample, inputReady));
             cancel.Token.ThrowIfCancellationRequested();
             if (_micSetupWatch != watch) return;
-            if (pairInput && _connections.Session != session) { Reply("disconnected"); return; }
+            if (recordingPair && _connections.Session != session) { Reply("disconnected"); return; }
             bool audible = recorded.Level != "silent";
             int sourcePeak = AudioEndpoints.PeakDb(Math.Max(0, Volatile.Read(ref watch.CheckPeak)) / 32768d);
-            Log.Info("mic", $"sound check: Windows {(audible ? "received signal" : "reported silence")}, peak {recorded.PeakDb} dBFS, Pairside feed {sourcePeak} dBFS");
-            Reply(!audible && pairInput && !watch.TestingHardwareMic && sourcePeak > -45 ? "routeSilent" : recorded.Level, recorded);
+            string inputKind = parityInput ? "Parity mic" : watch.TestingHardwareMic ? "Hands-Free mic" : "Windows call input";
+            Log.Info("mic", $"sound check ({inputKind}): Windows {(audible ? "received signal" : "reported silence")}, peak {recorded.PeakDb} dBFS, Pairside feed {sourcePeak} dBFS");
+            watch.Sample = recorded;
+            watch.SampleUsedParityMic = parityInput;
+            Reply(!audible && parityInput && sourcePeak > -45 ? "routeSilent" : recorded.Level, recorded);
         }
         catch (MicCheck.MutedInputException)
         {
@@ -451,7 +503,7 @@ internal sealed partial class TrayApp
             if (_micSetupWatch == watch)
             {
                 string result = cancel.IsCancellationRequested ? watch.CheckStopReason :
-                    pairInput && session != _connections.Session ? "disconnected" : e.HResult switch
+                    recordingPair && session != _connections.Session ? "disconnected" : e.HResult switch
                     {
                         unchecked((int)0x88890004) or unchecked((int)0x88890026) or unchecked((int)0x80070490)
                             => "inputChanged", // Endpoint removed or invalidated.
@@ -484,8 +536,92 @@ internal sealed partial class TrayApp
             w.WriteStartArray("envelope");
             foreach (int bar in recording.Envelope) w.WriteNumberValue(bar);
             w.WriteEndArray();
-            w.WriteBase64String("wave", recording.Wave);
+            w.WriteBoolean("sample", true);
         }
+        pane.Post(_writer.End());
+    }
+
+    private static bool IsActiveSampleOutput(MixerDevice device) =>
+        device.Flow == MixerFlow.Output && device.State == MixerState.Active;
+
+    private void SetMicSamplePlayback(WebPane pane, int request, int revision, int position, bool play, string? endpoint)
+    {
+        if (_micSetupWatch is not { Sample: { } sample, Check: null } watch || watch.CheckRequest != request)
+        {
+            if (play)
+            {
+                Log.Info("mic", "sample replay skipped because the recording is no longer available");
+                PostMicSamplePlayback(pane, request, revision, position, false, true);
+            }
+            return;
+        }
+        watch.SamplePlayer.Cancel();
+        int duration = (sample.Wave.Length - 44) / 96;
+        position = Math.Min(position, duration);
+        if (!play || position == duration)
+        {
+            PostMicSamplePlayback(pane, request, revision, position, false);
+            return;
+        }
+        if (endpoint is not null && !_mixer.Devices.Any(device => IsActiveSampleOutput(device) &&
+            string.Equals(device.Id, endpoint, StringComparison.OrdinalIgnoreCase)))
+        {
+            PostMicSamplePlayback(pane, request, revision, position, false, true);
+            return;
+        }
+        var cancellation = watch.SamplePlayer.Begin();
+        CancellationToken token = cancellation.Token;
+        bool parityMic = watch.SampleUsedParityMic;
+        Task previous = watch.SamplePlayback;
+        void Report(int time, bool playing, bool failed = false) => _ui.Post(_ =>
+        {
+            bool ownsPlayback = playing ? watch.SamplePlayer.IsCurrent(cancellation) : watch.SamplePlayer.Complete(cancellation);
+            if (ownsPlayback && _micSetupWatch == watch && watch.Sample == sample)
+                PostMicSamplePlayback(pane, request, revision, time, playing, failed);
+        }, null);
+        watch.SamplePlayback = Task.Run(async () =>
+        {
+            int last = position;
+            try
+            {
+                await previous.ConfigureAwait(false);
+                // A fast replay can overlap the earbuds' acknowledgement of STOP.
+                long releaseBy = Environment.TickCount64 + 450;
+                while (parityMic && _mic.WaitingForMicRelease && Environment.TickCount64 < releaseBy)
+                    await Task.Delay(25, token).ConfigureAwait(false);
+                MicSampleOutput.Play(sample.Wave, position, token, time =>
+                {
+                    last = time;
+                    Report(time, true);
+                }, endpoint, playback => Log.Info("mic", $"sample replay started at {position} ms on " +
+                    $"{(endpoint is null ? "default" : "selected")} output, " +
+                    $"{(playback.NativeStereo ? "native stereo" : "Windows format conversion")}"));
+                Log.Info("mic", endpoint is null ? "sample replay completed on Windows multimedia output" :
+                    "sample replay completed on selected output");
+                Report(duration, false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                Report(position, false);
+            }
+            catch (Exception error) when (error is COMException or InvalidCastException or InvalidOperationException or
+                ArgumentException or UnauthorizedAccessException)
+            {
+                Log.Warn("mic", $"sample replay failed 0x{error.HResult:X8}: {error.Message}");
+                Report(last, false, true);
+            }
+        });
+    }
+
+    private void PostMicSamplePlayback(WebPane pane, int request, int revision, int position, bool playing, bool failed = false)
+    {
+        if (_main?.Pane != pane || !MainLive) return;
+        var w = _writer.Begin("micSamplePlayback");
+        w.WriteNumber("request", request);
+        w.WriteNumber("revision", revision);
+        w.WriteNumber("positionMs", position);
+        w.WriteBoolean("playing", playing);
+        w.WriteBoolean("failed", failed);
         pane.Post(_writer.End());
     }
 }

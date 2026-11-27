@@ -668,6 +668,8 @@ span.wp-menu__glyph {
     width var(--dur-fast) var(--ease-standard),
     background-color var(--dur-fast) var(--ease-standard);
 }
+.wp-scroll--more { opacity: .8; }
+.wp-scroll--more::before { background: color-mix(in srgb, var(--text-primary) 39%, transparent); }
 .wp-scroll--on,
 .wp-scroll:hover,
 .wp-scroll--drag {
@@ -695,6 +697,7 @@ span.wp-menu__glyph {
       rgb(0 0 0 / 44%) calc(100% - var(--scroll-fade) * .42),
       rgb(0 0 0 / 10%) calc(100% - var(--scroll-fade) * .14), transparent);
   }
+  .wp-body--more:has(:focus-visible) { mask-image: none; background-image: none; }
 }
 @media (forced-colors: active) {
   .wp-scroll { opacity: 1; }

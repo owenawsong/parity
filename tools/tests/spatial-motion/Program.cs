@@ -4,6 +4,19 @@ using System.Runtime.InteropServices;
 using WPods.Audio;
 using WPods.Core;
 
+var retry = new HeadTrackingRetry();
+Require(retry.Due(100), "Track immediately on the first attempt");
+retry.Failed(100);
+Require(!retry.Due(1099) && retry.Due(1100), "Retry quickly after an interrupted feed");
+retry.Failed(2100);
+Require(!retry.Due(5099) && retry.Due(5100), "Back off after the next failure");
+retry.Failed(6100);
+Require(!retry.Due(14099) && retry.Due(14100), "Allow a final automatic retry");
+retry.Failed(15100);
+Require(retry.Exhausted && !retry.Due(long.MaxValue), "Stop retrying until wear changes or the user retries");
+retry.Reset();
+Require(!retry.Exhausted && retry.Due(15200), "A new wear state or valid heading re-arms tracking");
+
 static HeadMotion TryGesture(string sensitivity, bool shake, int amplitude, bool changeMidway = false)
 {
     var motion = new HeadMotion();
@@ -63,20 +76,28 @@ foreach (byte service in new byte[] { 14, 16 })
 {
     foreach (int direction in new[] { -1, 1 })
     {
-        var gesture = new HeadMotion();
-        long time = 1000;
-        for (int i = 0; i < 16; i++)
-            gesture.Observe(Frame(Quaternion.Identity, i % 2 == 0, service), time += 25);
-        Require(gesture.Calibrated && gesture.GesturePitchUp == 0, "practice center");
-        var nod = Quaternion.CreateFromAxisAngle(Vector3.UnitY, direction * MathF.PI / 7);
-        float elevation = Vector3.Transform(-Vector3.UnitX, nod).Z;
-        for (int i = 0; i < 12; i++)
-            gesture.Observe(Frame(nod, i % 2 == 0, service), time += 25);
-        Require(Math.Sign(gesture.GesturePitchUp) == Math.Sign(elevation),
-            $"Practice pitch disagreed with physical elevation for motion service {service}");
+        foreach (bool pro3 in new[] { false, true })
+        {
+            var gesture = new HeadMotion(invertPracticePitch: pro3);
+            long time = 1000;
+            for (int i = 0; i < 16; i++)
+                gesture.Observe(Frame(Quaternion.Identity, i % 2 == 0, service), time += 25);
+            Require(gesture.Calibrated && gesture.GesturePitchUp == 0, "practice center");
+            var signedAxis = pro3 ? -Vector3.UnitY : Vector3.UnitY;
+            var nod = Quaternion.CreateFromAxisAngle(signedAxis, direction * MathF.PI / 7);
+            for (int i = 0; i < 12; i++)
+                gesture.Observe(Frame(nod, i % 2 == 0, service), time += 25);
+            Require(Math.Sign(gesture.GesturePitchUp) == direction,
+                $"Practice pitch disagreed with the calibrated sign for service {service}, Pro 3={pro3}");
+            gesture.ResetGesture();
+            for (int i = 0; i < 10; i++)
+                gesture.Observe(Frame(Quaternion.Identity, i % 2 == 0, service), time += 25);
+            Require(gesture.Gestures == 0 && gesture.Gesture is null,
+                "A motion already in progress must not carry from practice into shortcuts");
+        }
     }
 }
-Console.WriteLine("Practice pitch follows physical elevation on both motion services.");
+Console.WriteLine("Practice normalizes model pitch on both motion services and drops gestures across session changes.");
 Require(HeadMotion.UseAlternateFirst(null, true) && !HeadMotion.UseAlternateFirst(null, false), "first service by model");
 Require(!HeadMotion.UseAlternateFirst(14, true) && HeadMotion.UseAlternateFirst(16, false), "verified report overrides model");
 // Replay the start of a recorded sensor stream, including its pre-fusion reports.
@@ -143,16 +164,17 @@ for (int ms = 110; ms <= 590; ms += 20)
 Require(glitchTracker.SpatialYaw == 0 && glitchTracker.LastSample == 70, "early-style zero bursts must not overwrite a valid heading");
 glitchTracker.Observe(Frame(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 1.7f), true), 610);
 Require(glitchTracker.LastSample == 610 && glitchTracker.SpatialYaw > 0, "a valid turn after the outage must reach the renderer");
-foreach (int cadence in new[] { 10, 20, 40 })
+foreach (int cadence in new[] { 10, 20, 40, 200, 250 })
 {
     var streaming = new HeadMotion(spatial: true);
     Quaternion Turn(float degrees) => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, degrees * MathF.PI / 180);
     streaming.Observe(Frame(Turn(17), true), 1000);
     streaming.Observe(Frame(Turn(17), true), 1000);
     Require(!streaming.Calibrated, "batched frames cannot establish a fresh center");
-    streaming.Observe(Frame(Turn(17 + cadence * .24f), true), 1000 + cadence);
+    float turn = Math.Min(cadence * .24f, 30);
+    streaming.Observe(Frame(Turn(17 + turn), true), 1000 + cadence);
     Require(streaming.Calibrated && streaming.SpatialYaw == 0, $"center while turning at {cadence} ms cadence");
-    streaming.Observe(Frame(Turn(17 + cadence * .48f), true), 1000 + 2 * cadence);
+    streaming.Observe(Frame(Turn(17 + 2 * turn), true), 1000 + 2 * cadence);
     Require(streaming.SpatialYaw < -.5, "motion reaches the renderer on the next report");
 }
 var cold = new HeadMotion(spatial: true);
@@ -165,7 +187,7 @@ Require(!cold.Calibrated, "a stale report cannot set center");
 Require(!cold.Observe(Frame(Quaternion.Identity, true, 24), 1810), "unsupported service");
 cold.Observe(Frame(Quaternion.Identity, true, 14), 1840);
 Require(cold.Calibrated && cold.ReportService == 14, "valid new pair establishes fresh center");
-Console.WriteLine("Fresh orientation established within one 10/20/40 ms sensor interval while turning; burst, stale and discontinuous frames rejected.");
+Console.WriteLine("Head tracking calibrated on fast reports and the observed 5 Hz cadence, while rejecting bursts, stale reports and discontinuities.");
 
 foreach (Quaternion mount in new[] { Quaternion.Identity, Quaternion.CreateFromYawPitchRoll(.63f, -.92f, .28f) })
 {

@@ -2,9 +2,10 @@ import { createHeadphoneLevel } from '../components/headphoneLevel';
 import { createSpotifySpatial } from '../components/spotifySpatial';
 import { createSpatialPlayer } from '../components/spatialPlayer';
 import { createPlaybackBehavior } from '../components/playbackBehavior';
+import { playbackNotice } from '../components/playbackNotice';
 import { createSegmented } from '../components/segmented';
 import { setAttr, setDisabled, setHidden, setText } from '../dom';
-import { post } from '../host';
+import { isPairside, post } from '../host';
 import { Icon } from '../icons';
 import { t } from '../i18n';
 import type { DeviceId, EqResult, OnboardEq } from '../protocol';
@@ -12,6 +13,8 @@ import { capsOf, current, live, store } from '../state';
 import type { Ctx, Page } from './page';
 
 const BANDS = ['low', 'mid', 'high'] as const;
+const PREVIEW_INTERVAL_MS = 170;
+const COMMIT_SETTLE_MS = 220;
 type Slot = 'a' | 'b';
 const equal = (a: OnboardEq | null, b: OnboardEq | null): boolean =>
   a === b || (!!a && !!b && a.enabled === b.enabled && BANDS.every((band) => a[band] === b[band]));
@@ -22,6 +25,7 @@ const eqPath = (settings: OnboardEq): string => {
 
 export const createAudioMotion = (ctx: Ctx): Page => {
   let device: DeviceId | undefined;
+  let connectionId = 0;
   let request = 0;
   let pending: number | null = null;
   let result: EqResult['status'] | null = null;
@@ -30,10 +34,12 @@ export const createAudioMotion = (ctx: Ctx): Page => {
   let commitTimer = 0;
   let draft: OnboardEq | null = null;
   let baseline: OnboardEq | null = null;
+  let reportBeforeEdit: OnboardEq | null = null;
   let comparison: { active: Slot; alternate: OnboardEq } | null = null;
   let eqGroup!: HTMLElement;
   let routeName!: HTMLElement;
   let routeGroup!: HTMLElement;
+  let routeAction!: HTMLButtonElement;
   let eqModeRow!: HTMLDivElement;
   let connectionLink!: HTMLButtonElement;
   let bands!: HTMLDivElement;
@@ -65,17 +71,20 @@ export const createAudioMotion = (ctx: Ctx): Page => {
   };
   const canSend = () => {
     const selected = current();
-    return !!selected && selected.id === device && live(selected)?.ready === true;
+    if (!selected || selected.id !== device) return false;
+    const state = live(selected);
+    return state?.ready === true && !!state.onboardEq && (state.connectionId ?? 0) === connectionId;
   };
   const commit = () => {
     clearTimers();
     if (!hasEdit || !device || !draft || !canSend()) return;
     hasEdit = false;
     pending = request;
-    post({ type: 'setOnboardEq', id: device, request, value: { ...draft } });
-    ctx.update('features');
+    post({ type: 'setOnboardEq', id: device, connectionId, request, value: { ...draft } });
+    ctx.update('equalizer');
   };
   const edit = (livePreview: boolean) => {
+    if (!hasEdit) reportBeforeEdit = baseline;
     hasEdit = true;
     pending = null;
     request++;
@@ -86,16 +95,17 @@ export const createAudioMotion = (ctx: Ctx): Page => {
     if (livePreview && !previewTimer) {
       previewTimer = window.setTimeout(() => {
         previewTimer = 0;
-        if (hasEdit && device && draft && canSend()) {
-          post({ type: 'previewOnboardEq', id: device, request, value: { ...draft } });
+        if (store.windowVisible && hasEdit && device && draft && canSend()) {
+          post({ type: 'previewOnboardEq', id: device, connectionId, request, value: { ...draft } });
         }
-      }, 85);
+      }, PREVIEW_INTERVAL_MS);
     }
-    ctx.update('features');
+    ctx.update('equalizer');
   };
   const settleEdit = () => {
+    if (!hasEdit) return;
     clearTimeout(commitTimer);
-    commitTimer = window.setTimeout(commit, 220);
+    commitTimer = window.setTimeout(commit, COMMIT_SETTLE_MS);
   };
   const mode = createSegmented<'recommended' | 'custom'>({
     name: 'onboardEqMode',
@@ -126,7 +136,7 @@ export const createAudioMotion = (ctx: Ctx): Page => {
         edit(false);
         commit();
       }
-      ctx.update('features');
+      ctx.update('equalizer');
     },
   });
   const beginBandEdit = () => {
@@ -156,7 +166,7 @@ export const createAudioMotion = (ctx: Ctx): Page => {
             class="wp-sound-fader__input" type="range" min="0" max="100" step="1" ref={input}
             oninput={() => {
               const value = Number(input.value);
-              if (!draft || comparison?.active === 'a') return;
+              if (!draft || comparison?.active === 'a' || draft[band] === value) return;
               beginBandEdit();
               draft[band] = value;
               paint(value);
@@ -166,8 +176,10 @@ export const createAudioMotion = (ctx: Ctx): Page => {
             onpointercancel={settleEdit}
             onblur={settleEdit} />
         </div>
-        <label ref={label} id={`eq-${band}-label`} l:text={`audioMotion.${band}`} />
-        <output class="wp-sound-band__value" aria-hidden="true" ref={reading} />
+        <div class="wp-sound-band__caption">
+          <label ref={label} id={`eq-${band}-label`} l:text={`audioMotion.${band}`} />
+          <output class="wp-sound-band__value" aria-hidden="true" ref={reading} />
+        </div>
       </div>
     ) as HTMLDivElement;
     label.htmlFor = input.id;
@@ -226,7 +238,7 @@ export const createAudioMotion = (ctx: Ctx): Page => {
       <section class="wp-group wp-eq-section" ref={eqGroup} id="sound-equalizer" tabindex="-1">
         <div class="wp-list wp-eq-card">
           <header class="wp-sound-eq-head">
-            <h2 l:text="audioMotion.eq" />
+            <h2 l:text={isPairside ? 'pcEq.onDevice' : 'audioMotion.eq'} />
             <div class="wp-eq-card__mode" ref={eqModeRow}>{mode.el}</div>
           </header>
           <div class="wp-eq-card__bands" ref={bands} onpointerdown={() => bands.classList.remove('is-switching')} onkeydown={() => bands.classList.remove('is-switching')}>
@@ -239,7 +251,7 @@ export const createAudioMotion = (ctx: Ctx): Page => {
             <button type="button" class="wp-link" l:text="audioMotion.finishCompare" onclick={() => {
               commit();
               comparison = null;
-              ctx.update('features');
+              ctx.update('equalizer');
               requestAnimationFrame(() => controls[0].input.focus({ preventScroll: true }));
             }} />
           </div>
@@ -262,17 +274,34 @@ export const createAudioMotion = (ctx: Ctx): Page => {
           </div>
         </div>
       </section>
+      <section class="wp-group" aria-labelledby="sound-output-title" ref={routeGroup} hidden>
+        <div class="wp-sound-output">
+          <div class="wp-sound-output__details" role="status">
+            <h2 id="sound-output-title" l:text="home.windowsOutput" />
+            <strong ref={routeName} />
+          </div>
+          <button type="button" class="wp-link wp-focusable" ref={routeAction} onclick={() => {
+            const pair = current();
+            if (pair?.conn !== 'connected') return;
+            const notice = playbackNotice(pair.id);
+            if (!notice || notice.switching) return;
+            if (notice.usePair) post({ type: 'usePairOutput', id: pair.id });
+            else post({ type: 'openSoundSettings' });
+          }} />
+        </div>
+      </section>
       <details class="wp-room wp-spatial-room wp-tool-details" ref={spatialPanel} ontoggle={syncSpatial}>
         <summary class="wp-room__title">
           <Icon name="spatial-room" />
           <span l:text="nav.spatialAudio" />
+          {spatial.outputCaption}
           <Icon name="chevron-down" />
         </summary>
         {spatial.el}
       </details>
       <section class="wp-group" aria-labelledby="sound-measurements">
         <h2 class="wp-group__title" id="sound-measurements" l:text="hearing.measurements" />
-        <div class="wp-list wp-sound-tools">
+        <div class="wp-list wp-sound-tools wp-hairline-group">
           <details class="wp-tool-details" ref={behaviorPanel}>
             <summary>
               <Icon name="adjustments" />
@@ -296,28 +325,18 @@ export const createAudioMotion = (ctx: Ctx): Page => {
           </details>
         </div>
       </section>
-      <section class="wp-group" aria-labelledby="sound-output-title" ref={routeGroup} hidden>
-        <div class="wp-sound-output">
-          <div class="wp-sound-output__details" role="status">
-            <h2 id="sound-output-title" l:text="soundWorkspace.outputElsewhere" />
-            <strong ref={routeName} />
-          </div>
-          <button type="button" class="wp-link wp-focusable" l:text="soundWorkspace.soundSettings"
-            onclick={() => post({ type: 'openSoundSettings' })} />
-        </div>
-      </section>
     </div>
   ) as HTMLDivElement;
   spatialPanel.open = true;
   plot.append(curve, ...controls.map((control) => control.row));
 
   const renderOutput = () => {
-    const route = store.playbackOutput;
-    const output = route?.defaultOutput;
     const pair = current();
-    const elsewhere = pair?.conn === 'connected' && route?.id === pair.id && output?.onPair === false;
-    setHidden(routeGroup, !elsewhere);
-    setText(routeName, elsewhere ? output.name ?? t('soundWorkspace.unnamedOutput') : '');
+    const notice = playbackNotice(pair?.conn === 'connected' ? pair.id : null);
+    setHidden(routeGroup, !notice);
+    setText(routeName, notice?.text ?? '');
+    setDisabled(routeAction, notice?.switching === true);
+    setText(routeAction, notice?.action ?? '');
   };
 
   const renderSpatial = () => {
@@ -332,14 +351,20 @@ export const createAudioMotion = (ctx: Ctx): Page => {
     playback.render();
     level.render();
     const d = current();
-    if (!d) return;
-    setHidden(behaviorPanel, !(['conversationAwareness', 'sleepDetection', 'personalizedVolume'] as const)
+    setHidden(behaviorPanel, !d || !(['conversationAwareness', 'sleepDetection', 'personalizedVolume'] as const)
       .some(feature => capsOf(d).has(feature)));
-    const st = live(d);
+    renderEqualizer();
+  };
+
+  const renderEqualizer = () => {
+    const d = current();
+    const st = d ? live(d) : null;
     const ready = st?.ready === true;
-    const reported = st?.onboardEq ?? null;
-    if (device !== d.id || (!st && (draft || baseline || hasEdit || pending !== null))) {
-      device = d.id;
+    const reported = ready ? st?.onboardEq ?? null : null;
+    const liveConnectionId = st?.connectionId ?? 0;
+    if (device !== d?.id || connectionId !== liveConnectionId || (!reported && draft)) {
+      device = d?.id;
+      connectionId = liveConnectionId;
       request++;
       pending = null;
       result = null;
@@ -347,19 +372,25 @@ export const createAudioMotion = (ctx: Ctx): Page => {
       clearTimers();
       baseline = null;
       draft = null;
+      reportBeforeEdit = null;
       comparison = null;
+    }
+    if (!d) {
+      setHidden(eqGroup, true);
+      return;
     }
     if (store.eqResult?.id === d.id && store.eqResult.request === pending) {
       result = store.eqResult.status;
       pending = null;
     }
     if (!equal(baseline, reported)) {
-      if ((!hasEdit && pending === null && equal(draft, baseline)) || result === 'confirmed' || !draft) {
+      if ((!hasEdit && pending === null && equal(draft, baseline)) || !draft) {
         draft = reported ? { ...reported } : null;
       }
       baseline = reported;
     }
-    const showEq = d.model === 'AirPods Pro 3' || !!reported;
+    if (!store.windowVisible && hasEdit) commit();
+    const showEq = d.model === 'AirPods Pro 3' || !!st?.onboardEq;
     setHidden(eqGroup, !showEq);
     setHidden(eqModeRow, !ready || !draft);
     setHidden(connectionLink, ready || !!st?.checking);
@@ -391,22 +422,25 @@ export const createAudioMotion = (ctx: Ctx): Page => {
       if (input.valueAsNumber !== value) input.valueAsNumber = value;
       paint(value);
     }
-    const retryable = ready && !hasEdit && pending === null && result !== null && result !== 'confirmed';
+    const retryable = ready && !hasEdit && pending === null && result === 'failed';
     setHidden(retry, !retryable);
+    const reportedEdit = result === 'sent' && equal(draft, reported) && !equal(reportBeforeEdit, reported);
     setAttr(eqStatus, 'data-state', !ready || !reported || pending !== null || hasEdit ? null :
-      retryable ? 'warning' : 'confirmed');
+      retryable ? 'warning' : reportedEdit ? 'confirmed' : null);
     setText(eqStatus, t(pending !== null ? 'audioMotion.eqApplying' : !ready ? 'audioMotion.connect' :
-      !reported ? 'audioMotion.eqWaiting' : result && result !== 'confirmed' ? `audioMotion.eq.${result}` :
-      hasEdit ? 'audioMotion.eqAdjusting' : result === 'confirmed' ? 'audioMotion.eq.confirmed' : 'soundWorkspace.eqRead'));
+      !reported ? 'audioMotion.eqWaiting' : retryable ? 'audioMotion.eq.failed' :
+      hasEdit ? 'audioMotion.eqAdjusting' : reportedEdit ? 'audioMotion.eq.confirmed' :
+      result === 'sent' ? 'audioMotion.eq.sent' : 'soundWorkspace.eqRead'));
 
   };
 
   return {
     el,
-    anchors: { equalizer: eqGroup, spatial: spatial.el, soundCheck, playbackBehavior: behaviorPanel, playbackLevels: levelPanel,
+    anchors: { equalizer: eqGroup, spatial: spatial.el, routing: spatial.routing, soundCheck, playbackBehavior: behaviorPanel, playbackLevels: levelPanel,
       conversationAwareness: playback.conversation },
     sections: {
       features: render,
+      equalizer: renderEqualizer,
       outputRoute: () => { renderOutput(); renderSpatial(); level.render(); },
       spotifySpatial: renderSpatial,
       nowPlaying: renderSpatial,

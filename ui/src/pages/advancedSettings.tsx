@@ -8,9 +8,10 @@ import { connectionReport } from '../components/connectionReport';
 import { t } from '../i18n';
 import { createSwitchRow, type SwitchRow } from '../components/switchRow';
 import { createWindowsSpatial } from '../components/windowsSpatial';
+import { createPcEqualizer } from '../components/pcEqualizer';
 import { setChecked, setDisabled, setHidden, setText } from '../dom';
-import { post } from '../host';
-import { Spinner } from '../icons';
+import { isPairside, post } from '../host';
+import { Icon, Spinner } from '../icons';
 import { capsOf, current, live, store } from '../state';
 import type { Ctx, Page } from './page';
 
@@ -75,6 +76,7 @@ export const createAdvancedSettings = (ctx: Ctx): Page => {
     else appleHistory.leave();
   });
   const windowsSpatial = createWindowsSpatial();
+  const pcEq = isPairside ? createPcEqualizer(() => ctx.go('audioMotion', 'routing')) : null;
   const mixer = NavRow({
     icon: 'mixer', title: 'mixer.title', desc: 'mixer.desc', onclick: () => ctx.go('mixer'),
   });
@@ -97,13 +99,15 @@ export const createAdvancedSettings = (ctx: Ctx): Page => {
   };
   const copyReport = async () => {
     refreshReport();
+    const text = reportText.value;
     try {
-      await navigator.clipboard.writeText(reportText.value);
-      copyStatus.textContent = t('diagnostics.copied');
+      await navigator.clipboard.writeText(text);
+      if (active && reportPanel.open && reportText.value === text) setText(copyStatus, t('diagnostics.copied'));
     } catch {
+      if (!active || !reportPanel.open || reportText.value !== text) return;
       reportText.focus();
       reportText.select();
-      copyStatus.textContent = t('diagnostics.manualCopy');
+      setText(copyStatus, t('diagnostics.manualCopy'));
     }
   };
   const el = (
@@ -111,6 +115,7 @@ export const createAdvancedSettings = (ctx: Ctx): Page => {
       <section class="wp-group" aria-labelledby="advancedPlaybackTitle" ref={windowsGroup}>
         <h2 class="wp-group__title" id="advancedPlaybackTitle" l:text="settings.windowsAudio" />
         <div class="wp-list">{NavRow({ icon: 'speaker', title: 'soundWorkspace.soundSettings', onclick: () => post({type:'openSoundSettings'}) })}{mixer}{windowsSpatial.el}</div>
+        {pcEq?.el ?? ''}
       </section>
       <section class="wp-group" aria-labelledby="advancedBluetoothTitle">
         <h2 class="wp-group__title" id="advancedBluetoothTitle" l:text="settings.bluetoothAudio" />
@@ -135,8 +140,12 @@ export const createAdvancedSettings = (ctx: Ctx): Page => {
       <section class="wp-group" ref={reportSection} aria-labelledby="supportReportTitle">
         <h2 class="wp-group__title" id="supportReportTitle" l:text="diagnostics.title" />
         {check.el}
-        <details class="wp-report" ref={reportPanel} ontoggle={refreshReport}>
-          <summary l:text="diagnostics.report" />
+        <details class="wp-tool-details wp-report" ref={reportPanel} ontoggle={() => {
+          if (reportPanel.open) refreshReport();
+          else copyStatus.textContent = '';
+        }}>
+          <summary><span l:text="diagnostics.report" /><Icon name="chevron-down" /></summary>
+          <p l:text="diagnostics.reportPrivacy" />
           <textarea ref={reportText} l:aria-label="diagnostics.report" />
           <button type="button" class="wp-link" onclick={copyReport} l:text="diagnostics.copy" />
           <span role="status" ref={copyStatus} />
@@ -182,19 +191,24 @@ export const createAdvancedSettings = (ctx: Ctx): Page => {
   };
 
   return { el, anchors: { audio: handsFree.row, latency: latency.row, latencyMic: micLatency.row, balance: balanceBlock,
-      windowsSpatial: windowsGroup, diagnostics: reportSection, appleHistory: appleHistory.el, ...devicePreferences.anchors },
-    sections: { windows: () => { renderHostControls(); refreshReport(); }, nc: renderDevice, hero: () => { renderHostControls(); refreshReport(); },
+      windowsSpatial: windowsGroup, diagnostics: reportSection, connectionReport: reportPanel,
+      appleHistory: appleHistory.el, ...(pcEq ? { pcEq: pcEq.el } : {}), ...devicePreferences.anchors },
+    sections: { windows: () => { renderHostControls(); refreshReport(); }, nc: renderDevice,
+      hero: () => { check.syncDevice(); renderHostControls(); refreshReport(); pcEq?.render(); },
       features: () => { renderDevice(); windowsSpatial.refresh(); },
       windowsSpatial: windowsSpatial.paint, outputRoute: () => { windowsSpatial.refresh(); refreshReport(); check.outputChanged(); },
-      connectionCheck: () => { check.paint(); refreshReport(); }, pulseFeed: pulseFeed.render, appleHistory: appleHistory.render },
+      connectionCheck: () => { check.paint(); refreshReport(); }, pulseFeed: pulseFeed.render, appleHistory: appleHistory.render,
+      pcEq: pcEq?.render, spotifySpatial: pcEq?.render },
     enter: () => {
       active = true;
+      pcEq?.enter();
       windowsSpatial.enter();
       check.enter();
       if (appleHistory.el.open) appleHistory.enter();
     },
     leave: () => {
       active = false;
+      pcEq?.leave();
       appleHistory.leave();
       windowsSpatial.leave();
       check.leave();

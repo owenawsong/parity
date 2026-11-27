@@ -3,6 +3,7 @@ import { createNearbyPreference } from '../components/layoutPreferences';
 import { NavRow } from '../components/common';
 import { createSwitchRow } from '../components/switchRow';
 import { setAttr, setChecked, setDisabled, setHidden, setText } from '../dom';
+import { hardwareArt } from '../hardwareArt';
 import { isPairside, post } from '../host';
 import { t } from '../i18n';
 import { Art, Glyph, Icon } from '../icons';
@@ -35,7 +36,15 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
   let deviceName!: HTMLHeadingElement;
   let deviceModel!: HTMLParagraphElement;
   let deviceArt!: HTMLSpanElement;
+  let deviceSection!: HTMLElement;
+  let deviceInformation!: HTMLDetailsElement;
+  let modelInfoRow!: HTMLDivElement;
+  let modelValue!: HTMLElement;
+  let firmwareLabel!: HTMLElement;
+  let firmwareValue!: HTMLElement;
+  let toolsSection!: HTMLElement;
   let modelArtKey = '';
+  let informationDevice = '';
 
   let langValue!: HTMLSpanElement;
   let toLanguage!: HTMLButtonElement;
@@ -90,7 +99,7 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
   const toCaseFinder = NavRow({ icon: 'locator', title: 'finder.title', onclick: () => ctx.go('caseFinder') });
   const el = (
     <div class="wp-page wp-preferences wp-app-settings">
-      <section class="wp-group wp-settings-device" aria-labelledby="deviceSettingsTitle">
+      <section class="wp-group wp-settings-device" aria-labelledby="deviceSettingsTitle" ref={deviceSection} hidden>
         <div class="wp-list wp-settings-rows">
           <header class="wp-settings-identity">
             <span class="wp-settings-product" aria-hidden="true" ref={deviceArt} />
@@ -110,11 +119,24 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
             </select>
           </label>
           {charge.row}
+          <details class="wp-tool-details wp-device-information" ref={deviceInformation} hidden>
+            <summary>
+              <span class="wp-row__lead"><Icon name="info" /></span>
+              <span class="wp-row__text"><span class="wp-row__title" l:text="settings.deviceInformation" /></span>
+              <Icon name="chevron-down" />
+            </summary>
+            <div class="wp-tool-details__body">
+              <dl>
+                <div ref={modelInfoRow}><dt l:text="settings.modelNumber" /><dd ref={modelValue} /></div>
+                <div><dt ref={firmwareLabel} /><dd ref={firmwareValue} /></div>
+              </dl>
+            </div>
+          </details>
         </div>
       </section>
       <section class="wp-group" aria-labelledby="settingsConnectionTitle">
         <h2 class="wp-group__title" id="settingsConnectionTitle" l:text="settings.connection" />
-        <div class="wp-list wp-settings-rows">
+        <div class="wp-list wp-settings-rows wp-hairline-group">
           {nearby.row}
           {isPairside && popupBatteries.row}
           {addPair}
@@ -122,7 +144,7 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
       </section>
       <section class="wp-group" aria-labelledby="generalTitle">
         <h2 class="wp-group__title" id="generalTitle" l:text="settings.application" />
-        <div class="wp-list wp-settings-rows">
+        <div class="wp-list wp-settings-rows wp-hairline-group">
           {appearance}
           <button type="button" class="wp-row wp-row--nav wp-settings-language" ref={toLanguage} onclick={() => ctx.go('language')}>
             <span class="wp-row__lead"><Icon name="globe" /></span>
@@ -132,9 +154,9 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
           {startup.row}
         </div>
       </section>
-      <section class="wp-group" aria-labelledby="settingsToolsTitle">
+      <section class="wp-group" aria-labelledby="settingsToolsTitle" ref={toolsSection} hidden>
         <h2 class="wp-group__title" id="settingsToolsTitle" l:text="settings.more" />
-        <div class="wp-list wp-settings-rows wp-settings-tools">
+        <div class="wp-list wp-settings-rows wp-settings-tools wp-hairline-group">
           <details class="wp-tool-details wp-device-tools" ref={deviceTools}>
             <summary ref={deviceToolsToggle}>
               <span class="wp-row__lead"><Glyph name="pair" /></span>
@@ -153,7 +175,7 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
       </section>
       <section class="wp-group" ref={updateGroup}>
         <h2 class="wp-group__title" l:text="update.title" />
-        <div class="wp-list">
+        <div class="wp-list wp-settings-rows wp-hairline-group">
           <div class="wp-row">
             <div class="wp-row__text">
               <span class="wp-row__title" ref={versionText} />
@@ -186,10 +208,23 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
     setText(deviceName, d.name);
     setText(deviceModel, d.model);
     setHidden(deviceModel, !d.model || d.name === d.model);
-    const key = d.model + '/' + d.art;
+    if (informationDevice !== d.id) {
+      deviceInformation.open = false;
+      informationDevice = d.id;
+    }
+    setHidden(deviceInformation, !d.modelNumber && !d.firmwareBuild);
+    setHidden(modelInfoRow, !d.modelNumber);
+    setText(modelValue, d.modelNumber ?? '');
+    setText(firmwareLabel, t(d.firmwareBuild && !d.firmwareLive ? 'settings.lastFirmwareBuild' : 'settings.firmwareBuild'));
+    setText(firmwareValue, d.firmwareBuild ?? t(d.conn === 'connected' ? 'settings.firmwareUnavailable' : 'settings.firmwareConnect'));
+    setAttr(modelValue, 'dir', d.modelNumber ? 'ltr' : null);
+    setAttr(firmwareValue, 'dir', d.firmwareBuild ? 'ltr' : null);
+    const finish = store.maxFinishes[d.id];
+    const key = d.model + '/' + d.art + '/' + (finish ?? '');
     if (modelArtKey === key) return;
     modelArtKey = key;
-    const poster = (d.model === 'AirPods Pro 3' && PRO3_HOME_ART?.right) || AIRPODS_HOME_POSTERS?.[d.model];
+    const art = hardwareArt(d.model, false, finish);
+    const poster = art?.headphone ?? art?.right ?? AIRPODS_HOME_POSTERS?.[d.model];
     if (poster) {
       const image = document.createElement('img');
       image.src = poster;
@@ -202,16 +237,17 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
 
   const render = (): void => {
     setChecked(popupBatteries.input, store.popupSeparateBatteries);
-    const d = current();
-    if (!d) {
-      return;
-    }
-    renderDeviceHeading(d);
-    resumeSelect.value = String(d.host.earResumeSeconds ?? 15);
-    nearby.render();
     setChecked(startup.input, store.startup);
     const lang = store.languageByCode.get(store.language);
     setText(langValue, lang ? lang.originalName : t('lang.sameAsWindows'));
+    const d = current();
+    setHidden(deviceSection, !d);
+    setHidden(nearby.row, !d);
+    setHidden(toolsSection, !d);
+    if (!d) return;
+    renderDeviceHeading(d);
+    resumeSelect.value = String(d.host.earResumeSeconds ?? 15);
+    nearby.render();
   };
 
   const renderDeviceTools = () => {
@@ -264,7 +300,7 @@ export const createWindowsSettings = (ctx: Ctx): Page => {
 
   return {
     el,
-    anchors: { appearance, nearby: nearby.row, popupBatteries: popupBatteries.row, startup: startup.row, advanced, earResume: resumeRow, deviceTools,
+    anchors: { appearance, nearby: nearby.row, popupBatteries: popupBatteries.row, startup: startup.row, advanced, earResume: resumeRow, deviceTools, deviceInformation,
       optimizedCharging: charge.row, ...devicePreferences.anchors },
     sections: { windows: render, features: renderDeviceTools, hero: renderDeviceTools, update: renderUpdate },
     returnFocus: from => {

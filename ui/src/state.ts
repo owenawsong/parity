@@ -28,6 +28,7 @@ import type {
   MicSlot,
   MicSetup,
   MicCheck,
+  MicSamplePlayback,
   MicStatus,
   Mixer,
   MediaTimeline,
@@ -42,6 +43,7 @@ export type Section =
   | 'batteryHistory'
   | 'appleHistory'
   | 'pulse'
+  | 'pulseStatus'
   | 'pulseFeed'
   | 'headphoneLevel'
   | 'spotifyLevels'
@@ -59,10 +61,14 @@ export type Section =
   | 'menu'
   | 'nc'
   | 'micSetup'
+  | 'micSignal'
+  | 'micSample'
   | 'caseFinder'
   | 'mic'
   | 'gesture'
   | 'features'
+  | 'equalizer'
+  | 'pcEq'
   | 'controls'
   | 'windows'
   | 'langs'
@@ -107,10 +113,14 @@ export const store = {
   batteryPart: 'left' as BatteryPart,
   appleHistory: null as Extract<HostToMain, {type: 'appleHeadphoneHistory'}> | null,
   headphoneLevel: null as HeadphoneLevel | null,
+  pcEq: null as Extract<HostToMain, { type: 'pcEq' }> | null,
+  acousticLevel: null as Extract<HostToMain, {type: 'acousticLevel'}> | null,
+  acousticCalibration: null as Extract<HostToMain, {type: 'acousticCalibration'}> | null,
   reduceMotion: false,
   popupSeparateBatteries: false,
   sidebarOrder: [] as string[],
   autoConnectDevices: [] as DeviceId[],
+  maxFinishes: {} as Record<DeviceId, string>,
   windowVisible: true,
   pulseLive: null as Extract<HostToMain, {type: 'pulseLive'}> | null,
   pulseLibrary: null as Extract<HostToMain, {type: 'pulseLibrary'}> | null,
@@ -140,6 +150,7 @@ export const store = {
   micSetup: null as MicSetup | null,
   micWatchRequest: 0,
   micCheck: null as MicCheck | null,
+  micSamplePlayback: null as MicSamplePlayback | null,
   caseSignal: null as CaseSignal | null,
   eqResult: null as EqResult | null,
   headMotion: null as HeadMotion | null,
@@ -278,6 +289,14 @@ const disconnecting = new Set<DeviceId>();
 const MASKED = new Set<Conn>(['connected', 'reconnecting', 'connecting']);
 let lastDevices: Device[] = [];
 
+const resetMicWatch = (): void => {
+  store.micCheck = null;
+  store.micSamplePlayback = null;
+  store.micSetup = null;
+  store.micWatchRequest = 0;
+  mark('micSetup');
+};
+
 export const beginDisconnect = (id: DeviceId): void => {
   disconnecting.add(id);
   const d = store.byId.get(id);
@@ -303,6 +322,7 @@ const applyDevices = (devices: Device[], attached: DeviceId | null): void => {
     store.byId.set(d.id, entry);
   }
   if (attached !== store.attached) {
+    resetMicWatch();
     store.otherOutput = null;
     store.outputAction = 'idle';
     mark('outputRoute');
@@ -391,6 +411,22 @@ export const apply = (msg: HostToMain): void => {
         mark('headphoneLevel');
       }
       break;
+    case 'pcEq':
+      if (msg.id === store.selected) {
+        store.pcEq = msg;
+        mark('pcEq');
+      }
+      break;
+    case 'acousticLevel':
+      if (msg.id === store.attached && store.windowVisible) {
+        store.acousticLevel = msg;
+        mark('headphoneLevel');
+      }
+      break;
+    case 'acousticCalibration':
+      store.acousticCalibration = msg;
+      mark('headphoneLevel');
+      break;
     case 'appleHeadphoneHistory':
       store.appleHistory = msg;
       mark('appleHistory');
@@ -401,7 +437,7 @@ export const apply = (msg: HostToMain): void => {
       break;
     case 'pulseLive':
       store.pulseLive = msg;
-      mark('pulse');
+      mark('pulseStatus');
       break;
     case 'pulseLibrary':
       store.pulseLibrary = msg;
@@ -429,7 +465,8 @@ export const apply = (msg: HostToMain): void => {
       const defaultChanged = !previous || previous.id !== msg.id ||
         (previous.defaultOutput === null) !== (msg.defaultOutput === null) ||
         previous.defaultOutput?.name !== msg.defaultOutput?.name ||
-        previous.defaultOutput?.onPair !== msg.defaultOutput?.onPair;
+        previous.defaultOutput?.onPair !== msg.defaultOutput?.onPair ||
+        previous.defaultOutput?.silence !== msg.defaultOutput?.silence;
       store.playbackOutput = msg;
       let overviewChanged = false;
       if (msg.id === store.attached) {
@@ -441,6 +478,7 @@ export const apply = (msg: HostToMain): void => {
       break;
     }
     case 'connectionCheck':
+      if (store.connectionCheck && msg.request < store.connectionCheck.request) break;
       store.connectionCheck = msg;
       mark('connectionCheck');
       break;
@@ -459,6 +497,7 @@ export const apply = (msg: HostToMain): void => {
       store.popupSeparateBatteries = msg.popupSeparateBatteries === true;
       store.sidebarOrder = msg.sidebarOrder ?? [];
       store.autoConnectDevices = msg.autoConnectDevices ?? [];
+      store.maxFinishes = msg.maxFinishes ?? {};
       store.nodAction = msg.nodAction ?? 'playPause';
       store.shakeAction = msg.shakeAction ?? 'none';
       store.gestureSensitivity = msg.gestureSensitivity ?? 'normal';
@@ -485,6 +524,7 @@ export const apply = (msg: HostToMain): void => {
       store.otherOutput = null;
       store.outputAction = 'idle';
       store.playbackOutput = null;
+      if (msg.attached !== store.attached) resetMicWatch();
       store.attached = msg.attached;
       store.selected = msg.selected ?? msg.attached;
       applyDevices(msg.devices, msg.attached);
@@ -510,11 +550,7 @@ export const apply = (msg: HostToMain): void => {
         mark('outputRoute');
       }
       if (!msg.visible) store.headMotion = null;
-      if (!msg.visible) {
-        store.micCheck = null;
-        store.micSetup = null;
-        store.micWatchRequest = 0;
-      }
+      if (!msg.visible) resetMicWatch();
       mark('hero', 'features');
       mark('micSetup', 'nowPlaying');
       break;
@@ -534,6 +570,7 @@ export const apply = (msg: HostToMain): void => {
       }
       break;
     case 'listeningMode':
+      if (msg.id !== undefined && msg.id !== store.attached) break;
       if (msg.request !== undefined) {
         if (!pendingMode || msg.id !== store.attached || msg.request !== pendingMode.request) break;
         pendingMode = null;
@@ -550,6 +587,7 @@ export const apply = (msg: HostToMain): void => {
       }
       break;
     case 'settings':
+      if (msg.id !== undefined && msg.id !== store.attached) break;
       if (st) {
         Object.assign(st, msg.settings);
         clearOutdatedAdaptiveResult(st.adaptiveStrength);
@@ -560,7 +598,6 @@ export const apply = (msg: HostToMain): void => {
       if (st) {
         st.heartRate = msg.heartRate;
         st.heartRateBpm = msg.heartRateBpm;
-        mark('features');
       }
       break;
     case 'caps':
@@ -595,11 +632,24 @@ export const apply = (msg: HostToMain): void => {
       store.micSetup = msg;
       mark('micSetup');
       break;
+    case 'micSignal': {
+      const setup = store.micSetup;
+      if (!setup || !store.windowVisible || msg.watchRequest !== store.micWatchRequest) break;
+      const { callsDb, captureDb, capturedMs, targetDb, listenDb } = msg;
+      Object.assign(setup, { callsDb, captureDb, capturedMs, targetDb, listenDb });
+      if (!dirty.has('micSetup')) mark('micSignal');
+      break;
+    }
     case 'micCheck':
       if (msg.request !== store.micCheck?.request ||
         (msg.status === 'recording' && store.micCheck.status === 'finishing')) break;
       store.micCheck = msg;
       mark('micSetup');
+      break;
+    case 'micSamplePlayback':
+      if (!store.windowVisible || store.micCheck?.request !== msg.request || !store.micCheck.sample) break;
+      store.micSamplePlayback = msg;
+      mark('micSample');
       break;
     case 'caseSignal':
       store.caseSignal = msg;
@@ -607,7 +657,7 @@ export const apply = (msg: HostToMain): void => {
       break;
     case 'onboardEqResult':
       store.eqResult = msg;
-      mark('features');
+      mark('equalizer');
       break;
     case 'spotifyLevels':
       if (msg.id === store.attached && store.spotifySpatial?.id === msg.id && store.spotifySpatial.mode !== 'stereo' && store.windowVisible) {
@@ -616,7 +666,8 @@ export const apply = (msg: HostToMain): void => {
       }
       break;
     case 'spotifyPose':
-      if (msg.id === store.attached && store.spotifySpatial?.mode === 'tracked' && store.windowVisible) {
+      if (msg.id === store.attached && store.spotifySpatial?.mode === 'tracked' && store.windowVisible &&
+          (store.spotifySpatial.status === 'playing' || store.spotifySpatial.status === 'waiting')) {
         store.spotifyPose = msg;
         mark('spotifyPose');
       }
@@ -628,9 +679,9 @@ export const apply = (msg: HostToMain): void => {
       }
       break;
     case 'spotifySpatial':
-      if (msg.mode !== 'stereo' || msg.source !== store.spotifySpatial?.source) store.spotifyOutput = null;
-      if (msg.mode === 'stereo' || msg.id !== store.spotifySpatial?.id) store.spotifyLevels = null;
-      if (msg.mode !== 'tracked' || msg.id !== store.spotifySpatial?.id || msg.status === 'calibrating' || msg.status === 'trackingMic')
+      if (msg.routed || msg.mode !== 'stereo' || msg.source !== store.spotifySpatial?.source) store.spotifyOutput = null;
+      if ((!msg.routed && msg.mode === 'stereo') || msg.id !== store.spotifySpatial?.id) store.spotifyLevels = null;
+      if (msg.mode !== 'tracked' || msg.id !== store.spotifySpatial?.id || (msg.status !== 'playing' && msg.status !== 'waiting'))
         store.spotifyPose = null;
       store.spotifySpatial = msg;
       mark('spotifySpatial');
@@ -716,6 +767,11 @@ export const apply = (msg: HostToMain): void => {
       if (msg.popupSeparateBatteries !== undefined) store.popupSeparateBatteries = msg.popupSeparateBatteries;
       if (msg.sidebarOrder) { store.sidebarOrder = msg.sidebarOrder; mark('menu'); }
       if (msg.autoConnectDevices) store.autoConnectDevices = msg.autoConnectDevices;
+      if (msg.maxFinishes) {
+        const id = store.selected;
+        if (id && store.maxFinishes[id] !== msg.maxFinishes[id]) mark('hero');
+        store.maxFinishes = msg.maxFinishes;
+      }
       if (msg.startup !== undefined) {
         store.startup = msg.startup;
       }

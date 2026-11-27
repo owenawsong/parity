@@ -15,6 +15,7 @@ export type PageName =
   | 'appearance'
   | 'advanced'
   | 'windows'
+  | 'ownerPreview'
   | 'language'
   | 'pair'
   | 'enhancement'

@@ -1,12 +1,12 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
+using WPods.Audio;
 
 namespace WPods.Core;
 
 /// <summary>
 /// Default-output follow: with several AirPods pairs linked, the session goes to the pair that is the default Windows
-/// playback device (wpods_native wpn_audio_is_default_output: the default console render endpoint's container ID
-/// equals the pair's Bluetooth devnode container ID) and switches when Windows switches. A default output that is not
+/// multimedia playback device and switches when Windows switches. A default output that is not
 /// a linked pair keeps the current session; a pair the user disconnected is never attached
 /// (<see cref="ConnectionManager.FollowDefaultOutputAsync"/>). Never pages. The IMMNotificationClient callback only
 /// flags the change and starts one thread-pool worker, which waits <see cref="CoalesceDelay"/> (Windows raises one
@@ -17,8 +17,8 @@ public sealed partial class DefaultOutputWatcher : IDisposable
 {
     private const int ClsctxInprocServer = 0x1;
     private const int RenderFlow = 0; // eRender
-    private const int ConsoleRole = 0; // eConsole
     private const int MultimediaRole = 1; // eMultimedia
+    private const int CommunicationsRole = 2; // eCommunications
 
     private static readonly TimeSpan CoalesceDelay = TimeSpan.FromMilliseconds(250);
     private static readonly Guid MmDeviceEnumeratorClass = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
@@ -26,7 +26,9 @@ public sealed partial class DefaultOutputWatcher : IDisposable
 
     internal static event Action? PlaybackRouteChanged;
     private static int _endpointRevision;
+    private static int _mediaRevision;
     internal static int EndpointRevision => Volatile.Read(ref _endpointRevision);
+    internal static int MediaRevision => Volatile.Read(ref _mediaRevision);
 
     private readonly ConnectionManager _connections;
     private readonly Lock _lock = new();
@@ -88,10 +90,26 @@ public sealed partial class DefaultOutputWatcher : IDisposable
     [LibraryImport("wpods_native.dll")]
     internal static partial int wpn_audio_is_default_output(ulong btAddress);
 
+    // Follow the same Windows role that the Overview displays and changes. The
+    // console role can stay on another pair and must not supersede this choice.
+    internal static bool IsMediaOutput(ulong address)
+    {
+        try { return AudioEndpoints.IsPhysicalPair(address, AudioEndpoints.ReadMediaOutputContainer()); }
+        catch (Exception e) when (e is COMException or InvalidCastException) { return false; }
+    }
+
+    internal static ulong FindMediaOutputPair(IEnumerable<ulong> addresses)
+    {
+        Guid? output;
+        try { output = AudioEndpoints.ReadMediaOutputContainer(); }
+        catch (Exception e) when (e is COMException or InvalidCastException) { return 0; }
+        return addresses.FirstOrDefault(address => AudioEndpoints.IsPhysicalPair(address, output));
+    }
+
     // On an audio service thread: flag and return at once.
     private void OnDefaultDeviceChanged(int flow, int role)
     {
-        if (flow != RenderFlow || (role != ConsoleRole && role != MultimediaRole))
+        if (flow != RenderFlow || role != MultimediaRole)
         {
             return;
         }
@@ -154,29 +172,16 @@ public sealed partial class DefaultOutputWatcher : IDisposable
     {
         ulong attached = _connections.Session?.Address ?? 0;
         string attachedText = attached == 0 ? "none" : Mac.Format(attached);
-        foreach (KnownDevice device in _connections.GetDevices())
+        ulong target = FindMediaOutputPair(_connections.GetDevices().Where(device => device.LinkUp).Select(device => device.Address));
+        if (target != 0)
         {
-            if (!device.LinkUp)
-            {
-                continue;
-            }
-            int result = wpn_audio_is_default_output(device.Address);
-            if (result < 0)
-            {
-                Log.Warn("follow", $"{Mac.Format(device.Address)}: default output check error 0x{result:X8}");
-                continue;
-            }
-            if (result == 0)
-            {
-                continue;
-            }
-            if (device.Address == attached)
+            if (target == attached)
             {
                 Log.Info("follow", $"default output is the attached pair {attachedText}, nothing to do");
                 return;
             }
-            Log.Info("follow", $"default output is {Mac.Format(device.Address)}, session={attachedText}: following");
-            await _connections.FollowDefaultOutputAsync(device.Address).ConfigureAwait(false);
+            Log.Info("follow", $"default output is {Mac.Format(target)}, session={attachedText}: following");
+            await _connections.FollowDefaultOutputAsync(target).ConfigureAwait(false);
             return;
         }
         Log.Info("follow", $"default output is not a linked pair, keeping session={attachedText}");
@@ -221,20 +226,26 @@ public sealed partial class DefaultOutputWatcher : IDisposable
     {
         public int OnDeviceStateChanged(nint deviceId, uint newState)
         {
+            Interlocked.Increment(ref _endpointRevision);
+            Interlocked.Increment(ref _mediaRevision);
             PlaybackRouteChanged?.Invoke();
             return 0;
         }
 
-        public int OnDeviceAdded(nint deviceId) => 0;
+        public int OnDeviceAdded(nint deviceId) => OnDeviceStateChanged(deviceId, 0);
 
-        public int OnDeviceRemoved(nint deviceId) => 0;
+        public int OnDeviceRemoved(nint deviceId) => OnDeviceStateChanged(deviceId, 0);
 
         public int OnDefaultDeviceChanged(int flow, int role, nint defaultDeviceId)
         {
-            if (role == MultimediaRole && flow == RenderFlow) PlaybackRouteChanged?.Invoke();
-            if (role == MultimediaRole)
+            if (role is MultimediaRole or CommunicationsRole)
             {
                 Interlocked.Increment(ref _endpointRevision);
+            }
+            if (role == MultimediaRole && flow == RenderFlow)
+            {
+                Interlocked.Increment(ref _mediaRevision);
+                PlaybackRouteChanged?.Invoke();
             }
             owner.OnDefaultDeviceChanged(flow, role);
             return 0;

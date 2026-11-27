@@ -7,8 +7,21 @@ const tracks: Record<'opening' | 'lift', [number, number][]> = {
     [.69, 44.1], [.83, 41.8], [.95, 41.5]],
 };
 
+// A monotone cubic preserves the keyed framing and carries velocity through
+// each interval. At a reversal or endpoint the camera eases to a stop.
+function trackSlope(points: [number, number][], index: number): number {
+  if (index <= 0 || index >= points.length - 1) return 0;
+  const [priorTime, prior] = points[index - 1];
+  const [time, value] = points[index];
+  const [nextTime, next] = points[index + 1];
+  const incoming = (value - prior) / (time - priorTime);
+  const outgoing = (next - value) / (nextTime - time);
+  return incoming * outgoing > 0 ? 2 * incoming * outgoing / (incoming + outgoing) : 0;
+}
+
 export function frameCase(video: HTMLVideoElement, clip: 'opening' | 'lift'): () => void {
   const points = tracks[clip];
+  const slopes = points.map((_, index) => trackSlope(points, index));
   const listeners = new AbortController();
   const options = { signal: listeners.signal };
   let frame: number | undefined;
@@ -19,10 +32,14 @@ export function frameCase(video: HTMLVideoElement, clip: 'opening' | 'lift'): ()
       time *= (78 / 60) / (video.duration - 1 / 60);
     }
     const next = points.findIndex(point => point[0] > time);
-    const a = points[next < 0 ? points.length - 1 : Math.max(0, next - 1)];
+    const index = next < 0 ? points.length - 1 : Math.max(0, next - 1);
+    const a = points[index];
     const b = next < 0 ? a : points[next];
     const fraction = a === b ? 0 : (time - a[0]) / (b[0] - a[0]);
-    const y = a[1] + (b[1] - a[1]) * fraction;
+    const x = fraction;
+    const blend = x * x * (3 - 2 * x);
+    const y = a[1] + (b[1] - a[1]) * blend + (b[0] - a[0]) * x * (1 - x) *
+      ((1 - x) * slopes[index] - x * slopes[Math.max(next, index)]);
     video.style.translate = `-50% ${-y}%`;
     return next >= 0;
   };

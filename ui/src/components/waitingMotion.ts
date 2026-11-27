@@ -2,9 +2,6 @@ import { setHidden } from '../dom';
 import { frameCase } from './caseFraming';
 import type { DeviceId } from '../protocol';
 
-// This loop frame matches the first pose in the Pro 3 lift-out clip.
-const LIFT_POSE_TIME = 236 / 60;
-
 const createVideo = (loop = false) => {
   const video = document.createElement('video');
   video.className = 'wp-connect-wait';
@@ -20,7 +17,6 @@ const createVideo = (loop = false) => {
 export const createWaitingMotion = () => {
   const intro = createVideo();
   const rotation = createVideo(true);
-  frameCase(intro, 'opening');
   // Keep the last complete turn frame painted through seeks and the loop boundary.
   const surface = document.createElement('canvas');
   surface.className = 'wp-connect-wait wp-connect-turn';
@@ -29,7 +25,8 @@ export const createWaitingMotion = () => {
   const context = surface.getContext('2d');
   const turn = context ? surface : rotation;
   let frame: number | undefined;
-  const paint = () => {
+  let paintedTime = 0;
+  const paint = (mediaTime = rotation.currentTime) => {
     if (!context || rotation.seeking || rotation.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !rotation.videoWidth) return false;
     if (surface.width !== rotation.videoWidth || surface.height !== rotation.videoHeight) {
       surface.width = rotation.videoWidth;
@@ -37,33 +34,40 @@ export const createWaitingMotion = () => {
     }
     context.globalCompositeOperation = 'copy';
     context.drawImage(rotation, 0, 0);
+    paintedTime = mediaTime;
     return true;
   };
-  const painted = () => {
+  const painted: VideoFrameRequestCallback = (_now, { mediaTime }) => {
     frame = undefined;
     if (visible !== rotation) return;
-    paint();
+    paint(mediaTime);
     frame = rotation.requestVideoFrameCallback(painted);
   };
 
   let device: DeviceId | null = null;
+  let loaded: WaitingMotionAssets | null = null;
   let visible: HTMLVideoElement | null = null;
   let version = 0;
   let holding = false;
+  let matchTime: number | null = null;
+  let clearFraming: (() => void) | undefined;
   let keepTurning = true;
   let exit: Animation | undefined;
-  let cancelCue: (() => void) | undefined;
 
   const reset = () => {
-    if (!device && !visible && frame === undefined && !cancelCue && !exit) return;
+    if (!device && !visible && frame === undefined && !exit) return;
     version++;
     if (frame !== undefined) rotation.cancelVideoFrameCallback(frame);
     frame = undefined;
+    paintedTime = 0;
     setHidden(surface, true);
-    cancelCue?.();
+    clearFraming?.();
+    clearFraming = undefined;
+    matchTime = null;
     exit?.cancel();
     exit = undefined;
     device = null;
+    loaded = null;
     visible = null;
     holding = false;
     for (const video of [intro, rotation]) {
@@ -84,17 +88,24 @@ export const createWaitingMotion = () => {
           }
           frame = rotation.requestVideoFrameCallback(painted);
         }
-        if (visible && visible !== video) setHidden(visible === rotation ? turn : visible, true);
+        if (visible && visible !== video) {
+          visible.pause();
+          setHidden(visible === rotation ? turn : visible, true);
+        }
         visible = video;
-        setHidden(video === rotation ? turn : video, false);
+        const shown = video === rotation ? turn : video;
+        setHidden(shown, false);
       };
       present();
     }, () => {
       // Leave the poster or the last decoded frame in place.
     });
   };
+
   intro.addEventListener('ended', () => {
-    if (device && keepTurning && !holding && visible === intro) display(rotation);
+    if (!device || !keepTurning || holding || visible !== intro) return;
+    rotation.currentTime = 0;
+    display(rotation);
   });
 
   return {
@@ -102,12 +113,15 @@ export const createWaitingMotion = () => {
     rotation: turn,
     reset,
     show(id: DeviceId, assets: WaitingMotionAssets, loop: boolean): void {
-      if (device === id) {
+      if (device === id && assets === loaded) {
         if (loop !== keepTurning && !holding) {
           if (visible === rotation) {
             if (loop) void rotation.play().catch(() => {});
             else rotation.pause();
-          } else if (loop && visible === intro && intro.ended) display(rotation);
+          } else if (loop && visible?.ended) {
+            rotation.currentTime = 0;
+            display(rotation);
+          }
         }
         keepTurning = loop;
         return;
@@ -115,6 +129,9 @@ export const createWaitingMotion = () => {
       keepTurning = loop;
       reset();
       device = id;
+      loaded = assets;
+      matchTime = assets.cue ?? null;
+      if (assets.aligned) clearFraming = frameCase(intro, 'opening');
       if (intro.getAttribute('src') !== assets.intro || intro.error) intro.src = assets.intro;
       if (rotation.getAttribute('src') !== assets.loop || rotation.error) rotation.src = assets.loop;
       intro.currentTime = 0;
@@ -126,35 +143,29 @@ export const createWaitingMotion = () => {
       if (device !== id || !visible) return false;
       const player = visible;
       holding = true;
-      const distance = LIFT_POSE_TIME - rotation.currentTime;
-      if (player === rotation && distance >= .025 && distance <= .19 && !rotation.paused) {
-        await new Promise<void>((resolve) => {
-          let frame = 0;
-          const finish = (): void => {
-            clearTimeout(timeout);
-            cancelAnimationFrame(frame);
-            cancelCue = undefined;
-            resolve();
-          };
-          const check = (): void => {
-            if (rotation.currentTime >= LIFT_POSE_TIME - .009) finish();
-            else frame = requestAnimationFrame(check);
-          };
-          const timeout = window.setTimeout(finish, 220);
-          cancelCue = finish;
-          frame = requestAnimationFrame(check);
-        });
+      const target = matchTime;
+      const duration = rotation.duration;
+      const distance = target === null ? Infinity : Math.abs(target - (context ? paintedTime : rotation.currentTime));
+      const matched = distance < .022 || (Number.isFinite(duration) && Math.abs(duration - distance) < .022);
+      // A confirmed connection should not wait for the turn to reach a cue.
+      if (player === rotation && matched) {
+        player.pause();
+        return true;
       }
-      if (player !== visible || device !== id) return false;
-      player.pause();
-      if (player === rotation && Math.abs(rotation.currentTime - LIFT_POSE_TIME) < .04) return true;
-      // Different angles have two distinct silhouettes. Fade out the outgoing
-      // pose before introducing the lift so the two lids can never overlap.
-      exit = (player === rotation ? turn : player).animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 100, easing: 'ease-in', fill: 'forwards',
-      });
-      await exit.finished.catch(() => {});
       return false;
+    },
+    finishHandoff(id: DeviceId, matched: boolean): void {
+      if (device !== id) return;
+      if (matched || !visible) {
+        reset();
+        return;
+      }
+      const request = version;
+      const shown = visible === rotation ? turn : visible;
+      exit = shown.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: 110, easing: 'ease-in', fill: 'forwards',
+      });
+      exit.onfinish = () => { if (request === version) reset(); };
     },
   };
 };

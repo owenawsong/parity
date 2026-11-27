@@ -37,6 +37,7 @@ public sealed class AapSession : IAsyncDisposable
     private static readonly TimeSpan HeartRateFirstReadingTimeout = TimeSpan.FromSeconds(12);
     private const int HeartRateAttempts = 3;
     private const uint HeartRatePeriodUs = 1_000_000;
+    private static int _nextConnectionId;
 
     // The open AAP pipe (message mode): one packet per message out; in, a kind byte, then a packet or the channel end.
     private readonly NamedPipeClientStream _stream;
@@ -70,8 +71,10 @@ public sealed class AapSession : IAsyncDisposable
     private TaskCompletionSource? _listeningModeSettled;
     private long _nextListeningModeDispatch;
     private bool _callAudio;
-    private (OnboardEq Eq, TaskCompletionSource Reply)? _customEqWrite;
-    private readonly TaskCompletionSource<OnboardEq> _customEqReport = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // A preview and its final commit use the same packet. Reuse a completed write until a report disagrees.
+    // Both fields are guarded by _stateLock. The revision also covers reports arriving during a write.
+    private OnboardEq? _lastWrittenCustomEq;
+    private int _customEqReportRevision;
     // Settings writes run on the save task, never on the read loop (which also carries mic audio) or under _stateLock.
     // One pending save per kind, so a burst is one write and the last value wins. Guarded by _saveLock.
     private readonly Lock _saveLock = new();
@@ -109,6 +112,7 @@ public sealed class AapSession : IAsyncDisposable
     }
 
     public ulong Address { get; }
+    internal int ConnectionId { get; } = Interlocked.Increment(ref _nextConnectionId);
     // Motion subscriptions differ across pairs. Remember only a service that
     // delivered valid reports on this connection. Pose is never cached here.
     internal byte? VerifiedMotionService { get; set; }
@@ -184,6 +188,10 @@ public sealed class AapSession : IAsyncDisposable
         catch (IOException e)
         {
             Log.Warn("aap", $"write failed: 0x{e.HResult:X8} {e.Message}");
+            return false;
+        }
+        catch (ObjectDisposedException) when (_life.IsCancellationRequested)
+        {
             return false;
         }
     }
@@ -283,27 +291,34 @@ public sealed class AapSession : IAsyncDisposable
     internal ValueTask<bool> EnableSleepDetectionAsync(CancellationToken ct) =>
         WriteAsync(Aap.Setting(Aap.SleepDetectionId, 1), ct);
 
-    internal Task<OnboardEq> ReadCustomEqAsync(CancellationToken ct) => _customEqReport.Task.WaitAsync(ct);
-
-    internal ValueTask<bool> PreviewCustomEqAsync(OnboardEq eq, CancellationToken ct) =>
-        State.CustomEq is null ? ValueTask.FromResult(false) : WriteAsync(Aap.CustomEqPacket(eq), ct);
-
-    internal async ValueTask<(bool Sent, bool Confirmed)> SetCustomEqAsync(OnboardEq eq, CancellationToken ct)
+    // A superseded edit may leave the queue without interrupting a packet already being written.
+    // Some AirPods report only on attach. Accept reports through the normal reader and keep the channel open.
+    internal async ValueTask<bool> WriteCustomEqAsync(OnboardEq eq, CancellationToken queueWait)
     {
-        TaskCompletionSource reply = NewSignal();
-        lock (_stateLock)
-        {
-            if (_customEqWrite.HasValue || State.CustomEq is null) return (false, false);
-            _customEqWrite = (eq, reply);
-        }
+        await _writeGate.WaitAsync(queueWait).ConfigureAwait(false);
         try
         {
-            if (!await WriteAsync(Aap.CustomEqPacket(eq), ct).ConfigureAwait(false)) return (false, false);
-            return (true, await WaitAsync(reply.Task, TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false));
+            int reportRevision;
+            lock (_stateLock)
+            {
+                queueWait.ThrowIfCancellationRequested();
+                if (_life.IsCancellationRequested || _readLoop.IsCompleted ||
+                    State.Status != SessionStatus.Ready || State.CustomEq is null) return false;
+                if (_lastWrittenCustomEq == eq) return true;
+                _lastWrittenCustomEq = null;
+                reportRevision = _customEqReportRevision;
+            }
+
+            if (!await WriteLockedAsync(Aap.CustomEqPacket(eq), CancellationToken.None).ConfigureAwait(false)) return false;
+            lock (_stateLock)
+            {
+                if (_customEqReportRevision == reportRevision || State.CustomEq == eq) _lastWrittenCustomEq = eq;
+            }
+            return true;
         }
         finally
         {
-            lock (_stateLock) _customEqWrite = null;
+            _writeGate.Release();
         }
     }
 
@@ -458,9 +473,7 @@ public sealed class AapSession : IAsyncDisposable
     }
 
     private (byte Strength, TaskCompletionSource Reply)? _adaptiveWrite;
-    private readonly TaskCompletionSource _initialSettings = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    internal Task WaitForInitialSettingsAsync(CancellationToken ct) => _initialSettings.Task.WaitAsync(ct);
 
     internal async ValueTask<(bool Sent, bool Confirmed)> SetAdaptiveStrengthAsync(byte strength, CancellationToken ct)
     {
@@ -752,10 +765,10 @@ public sealed class AapSession : IAsyncDisposable
         lock (_stateLock)
         {
             change = Aap.Apply(packet, State);
-            if (Aap.TryReadCustomEq(packet) is { } eq)
+            if (packet.Length == 13 && packet[4] == Aap.CustomEqOpcode && Aap.TryReadCustomEq(packet) is { } eq)
             {
-                _customEqReport.TrySetResult(eq);
-                if (_customEqWrite is { } eqWrite && eq == eqWrite.Eq) eqWrite.Reply.TrySetResult();
+                _customEqReportRevision++;
+                if (_lastWrittenCustomEq != eq) _lastWrittenCustomEq = null;
             }
             if (isSetting && packet[6] == Aap.AdaptiveStrengthId && packet[7] <= 100)
             {
@@ -829,6 +842,11 @@ public sealed class AapSession : IAsyncDisposable
             {
                 _audioWindowStart = Environment.TickCount64;
             }
+        }
+        else if (opcode == 0x1D)
+        {
+            // The identity record also carries the pair name and serial numbers.
+            // Those never need to be saved to the packet log.
         }
         else if (opcode == 0x31)
         {
@@ -954,7 +972,6 @@ public sealed class AapSession : IAsyncDisposable
                 Changed?.Invoke(DeviceChange.InitialReport);
                 SavePodSettings(DeviceChange.InitialReport);
             }
-            _initialSettings.TrySetResult();
             SaveCapabilities();
         }
         catch (OperationCanceledException)

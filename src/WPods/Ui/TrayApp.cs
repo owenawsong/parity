@@ -198,6 +198,7 @@ internal sealed partial class TrayApp : ApplicationContext
         _tray.MouseClick += OnTrayClick;
 
         connections.Attached += OnAttached;
+        connections.Ready += OnConnectReady;
         connections.Detached += OnDetached;
         connections.DevicesChanged += () => MarkDirty(Dirty.Devices);
         connections.LinkChanged += OnLinkChanged;
@@ -256,15 +257,18 @@ internal sealed partial class TrayApp : ApplicationContext
     {
         session.Changed += OnSessionChanged;
         Volatile.Write(ref _lastAttached, session.Address);
+        MarkDirty(Dirty.Session);
+    }
+
+    private void OnConnectReady(AapSession session)
+    {
         lock (_linkLock)
         {
-            if (_attachWaits.Remove(session.Address, out TaskCompletionSource? wait))
+            if (_readyWaits.Remove(session.Address, out TaskCompletionSource? wait))
             {
-                Log.Info("ui", $"attached {Mac.Format(session.Address)}: user connect wait completed");
                 wait.TrySetResult();
             }
         }
-        MarkDirty(Dirty.Session);
     }
 
     private void OnDetached(AapSession session)
@@ -537,7 +541,7 @@ internal sealed partial class TrayApp : ApplicationContext
             UpdateTray();
         if (MainLive)
         {
-            SendMainDeltas(dirty, state);
+            SendMainDeltas(dirty, session);
         }
         if ((dirty & Dirty.Offers) != 0)
         {
@@ -574,7 +578,7 @@ internal sealed partial class TrayApp : ApplicationContext
         }
     }
 
-    private void SendMainDeltas(Dirty dirty, DeviceState? state)
+    private void SendMainDeltas(Dirty dirty, AapSession? session)
     {
         if ((dirty & (Dirty.Devices | Dirty.CaseBattery)) != 0)
         {
@@ -583,14 +587,14 @@ internal sealed partial class TrayApp : ApplicationContext
         if ((dirty & Dirty.Session) != 0)
         {
             Utf8JsonWriter w = _writer.Begin("state");
-            MessageWriter.WriteState(w, state);
+            MessageWriter.WriteState(w, session);
             PostMain(_writer.End());
             // The snapshot carries every state field: forget what was sent for the previous session.
             Array.Clear(_lastSent, (int)Sent.Battery, (int)Sent.Mic - (int)Sent.Battery);
         }
-        else if (state is not null)
+        else if (session is not null)
         {
-            SendStateDeltas(dirty, state, force: false);
+            SendStateDeltas(dirty, session, force: false);
         }
         if ((dirty & Dirty.Mic) != 0)
         {
@@ -631,8 +635,9 @@ internal sealed partial class TrayApp : ApplicationContext
         MarkDirty(Dirty.Session | Dirty.Devices);
     }
 
-    private void SendStateDeltas(Dirty dirty, DeviceState state, bool force)
+    private void SendStateDeltas(Dirty dirty, AapSession session, bool force)
     {
+        DeviceState state = session.State;
         if ((dirty & Dirty.Battery) != 0)
         {
             Utf8JsonWriter w = _writer.Begin("battery");
@@ -648,12 +653,14 @@ internal sealed partial class TrayApp : ApplicationContext
         if ((dirty & Dirty.ListeningMode) != 0)
         {
             Utf8JsonWriter w = _writer.Begin("listeningMode");
+            w.WriteString("id", Mac.Format(session.Address));
             MessageWriter.WriteListeningMode(w, state);
             SendMain(Sent.ListeningMode, _writer.End(), force);
         }
         if ((dirty & Dirty.Settings) != 0)
         {
             Utf8JsonWriter w = _writer.Begin("settings");
+            w.WriteString("id", Mac.Format(session.Address));
             w.WriteStartObject("settings");
             MessageWriter.WriteSettingFields(w, state);
             w.WriteEndObject();
@@ -748,7 +755,7 @@ internal sealed partial class TrayApp : ApplicationContext
             MessageWriter.WriteDevice(w, device, conn, conn == "elsewhere" ? _nearby.GetNearbyBatteries(device.Address) : null, _settings.Get(device.Address),
                 _settings.GetPodSettings(device.Address), _settings.GetEarDetection(device.Address),
                 _settings.GetAllowOff(device.Address), _settings.GetMicSide(device.Address), _nearby.CaseLidOpen(device.Address),
-                _nearby.GetCaseBroadcast(device.Address), _caseHistory?.Get(device.Address));
+                _nearby.GetCaseBroadcast(device.Address), _caseHistory?.Get(device.Address), _nearby.GetCaseBudBroadcast(device.Address));
         }
         w.WriteEndArray();
         if (_session is { } session)
@@ -782,7 +789,8 @@ internal sealed partial class TrayApp : ApplicationContext
         }
         if (device.LinkUp)
         {
-            // "Reconnecting" only while WPods retries; otherwise a link just brought up is being joined.
+            if (_connections.Session is { } active && active.Address != device.Address) return "available";
+            // A link just brought up is being joined if no other pair owns the controls.
             return _connections.IsRetrying(device.Address) ? "reconnecting" : "connecting";
         }
         // Advertising nearby while its link to Windows is down: connected to another device.
@@ -988,6 +996,8 @@ internal sealed partial class TrayApp : ApplicationContext
 
     // ---- Exit (tray menu) ----
 
+    internal void RequestExit() => _ui.Post(_ => Exit(), null);
+
     private async void Exit()
     {
         if (_exiting)
@@ -1017,7 +1027,7 @@ internal sealed partial class TrayApp : ApplicationContext
         DestroyPopup();
         DestroyOsd();
         DestroyMain();
-        await _mic.StopStreamAsync();
+        await _mic.ShutdownStreamAsync();
         // After the detach: the Mixer letting go of the mic earlier would START it again in low latency mode.
         await _connections.DisposeAsync();
         _mixer.Dispose();

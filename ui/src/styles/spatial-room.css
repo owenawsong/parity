@@ -11,7 +11,7 @@
   background: var(--room-surface);
   overflow: hidden;
 }
-.wp-room__header, .wp-room__feedback {
+.wp-room__feedback {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -20,9 +20,22 @@
 .wp-room__source { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; font: 550 13px/1.4 var(--font-text); }
 .wp-room > .wp-room__title {
   min-height: 50px;
-  padding-inline: 16px;
-  font-size: 16px;
+  padding-inline: var(--audio-inset, 16px);
+  font-size: 15px;
 }
+.wp-room__title > .wp-icon { flex: none; }
+.wp-room__output-caption {
+  margin-inline-start: auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--room-soft);
+  font-size: 12px;
+  font-weight: 450;
+}
+.wp-room__title > .wp-room__output-caption + .wp-icon:last-child { margin-inline-start: 0; }
 .wp-room[open] > .wp-room__title { border-block-end: 1px solid var(--room-line); }
 .wp-room__body > .wp-room__tools { border-block-start: 1px solid var(--room-line); margin-block-start: 0; }
 .wp-room__tools > summary { min-height: 48px; padding-inline: 16px; }
@@ -31,13 +44,16 @@
 .wp-room__tools > summary .wp-room__stream-status:not([hidden]) + .wp-icon { margin-inline-start: 0; }
 .wp-page .wp-room__source select { inline-size: min(57%, 212px); }
 .wp-room__source select::picker(select) { min-inline-size: min(212px, 70vw); }
-.wp-room__header { padding: 14px 16px 0; }
-.wp-room__header > div { min-width: 0; }
-.wp-room__route small { display: block; margin-bottom: 3px; color: var(--room-soft); font: 550 12px/1.4 var(--font-text); }
-.wp-room__route h2 { overflow-wrap: anywhere; }
-.wp-room__header h2 { margin: 0; font: 650 17px/1.25 var(--font-display); letter-spacing: -.025em; }
-.wp-room__header p, .wp-room__feedback p { margin: 3px 0 0; color: var(--room-soft); font: 400 12px/1.45 var(--font-text); }
-.wp-room__header p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-room__remember { margin-inline: 16px; border-block-start: 1px solid var(--room-line); }
+.wp-room__remember .wp-row { padding: 12px 0; }
+.wp-room__remember .wp-row__title { font-size: 13px; }
+.wp-room__remember > button { margin-block-end: 12px; font-size: 12px; }
+.wp-room__top {
+  display: flex;
+  padding: 12px var(--audio-inset, 16px) 0;
+}
+.wp-room__media, .wp-room__feedback p { margin: 3px 0 0; color: var(--room-soft); font: 400 12px/1.45 var(--font-text); }
+.wp-room__media { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wp-room__field {
   position: relative;
   display: grid;
@@ -95,7 +111,7 @@
 .wp-room__paths li small, .wp-room__paths p { color: var(--room-soft); font: 400 12px/1.4 var(--font-text); }
 .wp-room__paths li button { font-size: 12px; margin-inline-start: auto; }
 .wp-room__paths p { margin: 5px 0 12px; }
-.wp-room__mode-select { padding: 10px 16px 0; }
+.wp-room__mode-select { min-width: 0; flex: 1 0 min(270px, 100%); }
 .wp-room__mode-select .wp-seg { width: 100%; }
 .wp-room__mode-select .wp-seg__face { min-height: 35px; align-items: center; }
 .wp-room__feedback { min-height: 30px; margin-top: 3px; gap: 8px 14px; flex-wrap: wrap; }
@@ -112,7 +128,7 @@
 .wp-spatial-room .wp-spatial__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 @media (prefers-reduced-motion: no-preference) {
   .wp-room-energy { transition: transform 100ms linear, opacity 100ms linear; }
-  .wp-room-listener { transition: transform 45ms linear; }
+  .wp-room-listener { transition: transform var(--room-pose-duration, 120ms) linear; }
   .wp-room-speaker, .wp-room-driver { transition: transform 240ms var(--ease-enter); }
   .wp-room-stage { transition: d 240ms var(--ease-enter), opacity 180ms; }
   .wp-room-screen, .wp-room-look { transition: opacity 180ms; }
@@ -146,11 +162,6 @@
   .wp-spatial-room .wp-local-spatial > summary { padding-inline: 11px; gap: 9px; }
   .wp-spatial-room .wp-local-spatial .wp-spatial__card { padding: 12px; }
 }
-.wp-room__route { flex: 1 1 0; }
-.wp-room__route h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wp-room__header { align-items: flex-start; }
-.wp-room__header p { min-height: 1.45em; }
-.wp-room__header p[hidden] { display: block !important; visibility: hidden; }
 .wp-room__feedback { min-height: 44px; }
 .wp-room__feedback p { min-width: 0; }
 .wp-room-modes[aria-busy='true'] .wp-seg__input { cursor: progress; }
@@ -167,6 +178,7 @@
 }
 @keyframes wp-room-switching { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
+  .wp-room-speaker .wp-room-energy { transform: none; }
   .wp-room-modes[aria-busy='true'] .wp-seg__input:checked + .wp-seg__face::after { animation: none; }
 }
 .wp-spatial__preview-mode { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }

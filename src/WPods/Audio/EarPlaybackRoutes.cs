@@ -9,6 +9,7 @@ internal static partial class AudioEndpoints
 {
 
     internal sealed record PlayerStream(string AppId, string Image, bool OnPair, bool Active);
+    internal sealed record MediaPlayerRoute(string AppId, bool Playing, bool Paused);
 
     internal sealed record SpatialSession(string AppId, string Image, string Output, string Endpoint = "");
 
@@ -140,6 +141,23 @@ internal static partial class AudioEndpoints
             found = true;
         }
         return found;
+    }
+
+    internal static int SelectPairPlayer(IReadOnlyList<PlayerStream> streams, IReadOnlyList<MediaPlayerRoute> players, bool allowPaused)
+    {
+        bool Matching(int index, bool playing) => (playing ? players[index].Playing : players[index].Paused) &&
+            PlaysOnPair(streams, players[index].AppId, paused: !playing);
+
+        var indices = Enumerable.Range(0, players.Count);
+        var candidates = indices.Where(i => Matching(i, playing: true)).Take(2).ToArray();
+        if (candidates.Length == 0 && allowPaused)
+            candidates = indices.Where(i => Matching(i, playing: false)).Take(2).ToArray();
+        if (candidates.Length != 1) return -1;
+
+        // Windows does not identify which browser tab owns a matching stream.
+        int candidate = candidates[0];
+        return players.Count(player => string.Equals(player.AppId, players[candidate].AppId, StringComparison.OrdinalIgnoreCase)) == 1
+            ? candidate : -1;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

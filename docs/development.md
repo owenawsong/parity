@@ -18,6 +18,8 @@ To verify the EXE without changing the live app or Bluetooth, use `--verify-pack
 
 `./tools/tests/check-parity-setup.ps1 -Setup dist/Parity-Setup-x64.exe` runs these checks together and verifies the bundled USB/IP package.
 
+Add `-CheckUi` to test the extracted UI with Edge and a simulated Bluetooth host. It checks the first-launch empty state, battery renders, available listening modes, and Nearby connection flow. Use a physical Windows test for pairing, audio, and sleep/wake.
+
 ## Build the desktop package
 
 From the repository root:
@@ -43,6 +45,10 @@ node ui/preview/build.mjs
 ```
 
 Open `dist/Pairside.html` for the dashboard or `dist/Latchwave Popup.html` for the nearby prompt. For a separate Windows preview app, publish `src/Pairside/Pairside.csproj` to `dist/pairside-desktop` and run `./tools/install-pairside-desktop.ps1` without `-Live`.
+
+Use `./tools/build-pairside-live.ps1 -OwnerPreview` for the local Owner Preview page. It uses the locally imported artwork and lets you compare the bundled renders. The build rejects `-OwnerPreview` together with `-PackagePath`.
+
+After importing the optional rotation assets, generate the local Overview poses and motions from the same cached bundles with `python tools/import-airpods-overview.py --ffmpeg <ffmpeg.exe>`. The importer uses Pillow, NumPy, OpenCV, and FFmpeg 9 or newer with HEVC alpha support. Owner Preview's **Overview connection** view plays the opening, holds the turn, and lets you confirm the connection to see the reveal. These media stay in `.build` and the opt-in local build.
 
 ## Run the checks
 
@@ -73,5 +79,7 @@ The bundled AirPods Pro 3 illustration is generated with [Blender source](../too
 blender -b -t 6 --python-exit-code 1 --python tools/render-pro3.py -- .build/parity-bundled-hardware --hardware
 python tools/pack-pro3-hardware.py .build/parity-bundled-hardware ui/src/assets/parity-pro3
 ```
+
+For the other shipped artwork, render with `--hardware --family=<family>` and pack into `ui/src/assets/parity-models/<family>`. The families are `classic`, `airpods3`, `airpods4`, `pro1`, `pro2`, and `max`. The known-model mapping is in `ui/tools/popup-assets.mjs`.
 
 [Local artwork and motion tools](local-artwork.md) describes how to prepare optional reference clips for local development.
